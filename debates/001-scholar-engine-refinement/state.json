@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "debate_id": "001-scholar-engine-refinement",
+  "topic": "Scholar Engine & MCP: Architecture Refinement, Query Optimization, and Autonomous Verification Roadmap",
+  "status": "completed",
+  "current_round": 3,
+  "rounds_total": 3,
+  "participants": [
+    "gemini",
+    "codex",
+    "claude"
+  ],
+  "created_at": "2026-09-26T20:39:42.368318+00:00",
+  "sessions": {},
+  "working_dirs": {
+    "project_root": "G:\\_OneDrive\\OneDrive\\Desktop\\Py Apps\\scholar-mcp",
+    "debate_folder": "G:\\_OneDrive\\OneDrive\\Desktop\\Py Apps\\scholar-mcp\\debates\\001-scholar-engine-refinement"
+  },
+  "config": {
+    "style": "thorough",
+    "max_words": 450
+  },
+  "telemetry": {
+    "round_durations": {
+      "1": 28.0,
+      "2": 75.4,
+      "3": 77.5
+    },
+    "retries_count": 0
+  },
+  "completed_at": "2026-09-26T20:48:55.885613+00:00"
+}
