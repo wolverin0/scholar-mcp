@@ -45,12 +45,62 @@ class ScholarEngine:
         self.gate = PreRAGGate(self.jev, self.store)
         self.verifier = PostRAGVerifier(self.jev)
 
-    async def search_papers(self, query: str, limit: int = 10) -> List[Paper]:
+    @staticmethod
+    def extract_evidence_spans(paper: Paper, query: str = "") -> List[Evidence]:
         """
-        Executes a broad multi-source search.
+        Extracts salient evidence passages with exact character offsets from the full abstract.
+        Prevents arbitrary truncation and maintains precise document provenance.
         """
-        papers = await self.arxiv.search(query, max_results=limit)
-        return papers
+        abstract = paper.abstract.strip()
+        if not abstract:
+            return []
+            
+        import re
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', abstract) if len(s.strip()) > 20]
+        evidences: List[Evidence] = []
+        for s in sentences:
+            start_pos = abstract.find(s)
+            end_pos = start_pos + len(s) if start_pos != -1 else len(s)
+            evidences.append(Evidence(
+                paper_id=paper.id,
+                section="abstract",
+                text=s,
+                start_char=start_pos if start_pos != -1 else 0,
+                end_char=end_pos,
+                source_field="abstract",
+                doc_id=paper.id,
+                confidence=1.0
+            ))
+        return evidences
+
+    async def search_papers(
+        self,
+        query: str,
+        limit: int = 10,
+        year_min: Optional[int] = None,
+        year_max: Optional[int] = None
+    ) -> List[Paper]:
+        """
+        Executes a broad multi-source search with optional year bounds.
+        """
+        papers = await self.arxiv.search(query, max_results=limit * 2 if (year_min or year_max) else limit)
+        if year_min or year_max:
+            filtered = []
+            for p in papers:
+                if p.published_date:
+                    try:
+                        yr = int(p.published_date[:4])
+                        if year_min and yr < year_min:
+                            continue
+                        if year_max and yr > year_max:
+                            continue
+                    except ValueError:
+                        pass
+                filtered.append(p)
+                if len(filtered) >= limit:
+                    break
+            return filtered
+        return papers[:limit]
 
     async def inspect_paper(self, paper_id: str) -> Optional[Paper]:
         """
@@ -77,6 +127,40 @@ class ScholarEngine:
 
         return paper
 
+    async def verify_custom_claim(self, claim_statement: str, paper_id: str) -> Optional[Claim]:
+        """
+        Verifies a user or agent-provided claim against a specific paper's full abstract/text.
+        Identifies the best matching evidence span with exact character offsets.
+        """
+        import re
+        paper = await self.inspect_paper(paper_id)
+        if not paper:
+            return None
+            
+        spans = self.extract_evidence_spans(paper)
+        if not spans:
+            evidence = Evidence(
+                paper_id=paper.id,
+                section="abstract",
+                text=paper.abstract,
+                start_char=0,
+                end_char=len(paper.abstract),
+                source_field="abstract",
+                doc_id=paper.id
+            )
+        else:
+            claim_words = set(re.findall(r'\w+', claim_statement.lower()))
+            best_span = max(spans, key=lambda s: len(claim_words.intersection(set(re.findall(r'\w+', s.text.lower())))))
+            evidence = best_span
+
+        claim = Claim(
+            id=f"claim_{paper.id}_{int(time.time())}",
+            statement=claim_statement,
+            paper_id=paper.id,
+            document_id=paper.id
+        )
+        return await self.verifier.verify_claim(claim, evidence)
+
     async def research_topic(
         self,
         query: str,
@@ -88,7 +172,7 @@ class ScholarEngine:
         1. Query Discovery
         2. Jev Pre-RAG Gatekeeper
         3. Citation Graph Enrichment
-        4. Claim Extraction & Verification
+        4. Claim Extraction & Span-Level Verification
         """
         t0 = time.perf_counter()
 
@@ -106,21 +190,31 @@ class ScholarEngine:
                 paper.openalex_id = work.openalex_id
                 paper.citations_count = work.cited_by_count
 
-        # Step 4: Verification of candidate findings / claims
+        # Step 4: Verification of candidate findings / claims with exact spans
         verified_claims: List[Claim] = []
         for paper in survivors:
-            # Construct a prototype finding claim based on title and abstract
-            claim = Claim(
-                id=f"claim_{paper.id}",
-                statement=f"Paper {paper.id} demonstrates practical techniques relevant to: {query}",
-                paper_id=paper.id
-            )
-            evidence = Evidence(
+            spans = self.extract_evidence_spans(paper, query)
+            primary_evidence = spans[0] if spans else Evidence(
                 paper_id=paper.id,
                 section="abstract",
-                text=paper.abstract[:500]
+                text=paper.abstract,
+                start_char=0,
+                end_char=len(paper.abstract),
+                source_field="abstract",
+                doc_id=paper.id
             )
-            checked_claim = await self.verifier.verify_claim(claim, evidence)
+            
+            claim_stmt = f"Paper '{paper.title}' establishes verifiable methodologies or empirical outcomes for {query}."
+            claim = Claim(
+                id=f"claim_{paper.id}",
+                statement=claim_stmt,
+                paper_id=paper.id,
+                document_id=paper.id
+            )
+            checked_claim = await self.verifier.verify_claim(claim, primary_evidence)
+            if len(spans) > 1:
+                checked_claim.supporting_evidence.extend(spans[1:3])
+                
             paper.claims.append(checked_claim)
             verified_claims.append(checked_claim)
 

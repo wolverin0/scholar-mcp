@@ -6,7 +6,7 @@ Covers papers, authors, citations, semantic predicates, claims, and evidence.
 from __future__ import annotations
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class Author(BaseModel):
@@ -31,6 +31,10 @@ class Evidence(BaseModel):
     text: str
     figure_or_table: Optional[str] = None
     confidence: float = 1.0
+    start_char: Optional[int] = Field(default=None, description="Exact start character offset in source text")
+    end_char: Optional[int] = Field(default=None, description="Exact end character offset in source text")
+    source_field: str = Field(default="abstract", description="Field source: abstract, conclusion, methods, full_text")
+    doc_id: Optional[str] = None
 
 
 class Claim(BaseModel):
@@ -43,6 +47,16 @@ class Claim(BaseModel):
     )
     verification_probability: Optional[float] = None
     supporting_evidence: List[Evidence] = Field(default_factory=list)
+    source: str = Field(
+        default="heuristic",
+        description="Verification source: 'live' (real API / LLM) or 'heuristic' (local fallback)"
+    )
+    result_state: str = Field(
+        default="heuristic",
+        description="Result state: verified, heuristic, failed, contradicted, unsupported"
+    )
+    model_version: Optional[str] = None
+    document_id: Optional[str] = None
 
 
 class Paper(BaseModel):
@@ -75,7 +89,7 @@ class Paper(BaseModel):
         default="arxiv",
         description="Source: arxiv_api, arxiv_complete, openalex, cache"
     )
-    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def matches_predicates(self, thresholds: Dict[str, float]) -> bool:
         """

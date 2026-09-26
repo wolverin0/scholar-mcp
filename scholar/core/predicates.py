@@ -7,7 +7,7 @@ from __future__ import annotations
 import sqlite3
 import json
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 
@@ -16,7 +16,7 @@ class SemanticPredicate(BaseModel):
     question: str = Field(description="The precise prompt or question evaluated by Jev System One")
     domain: Optional[str] = Field(default="general", description="Domain: wireless, agents, ai, databases")
     default_threshold: float = Field(default=0.75, description="Recommended filtering threshold")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class PredicateResult(BaseModel):
@@ -26,7 +26,7 @@ class PredicateResult(BaseModel):
     confidence: Optional[float] = 1.0
     model: str = "jev-system-one"
     latency_ms: Optional[float] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class PredicateStore:

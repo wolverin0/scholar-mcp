@@ -26,6 +26,8 @@ class JevDecision(BaseModel):
     scores: Optional[Dict[str, float]] = None
     latency_ms: float
     model_version: str = "jev-system-one"
+    source: str = Field(default="live", description="'live' (verified API/LLM) or 'heuristic' (simulated/fallback)")
+    is_heuristic: bool = Field(default=False, description="True if result was generated via local heuristics")
 
 
 class JevClient:
@@ -54,7 +56,9 @@ class JevClient:
                 question=question,
                 probability=prob,
                 latency_ms=round(latency_ms, 2),
-                model_version="jev-simulated-v1"
+                model_version="jev-simulated-v1",
+                source="heuristic",
+                is_heuristic=True
             )
 
         # Real API request
@@ -81,12 +85,16 @@ class JevClient:
                 data = resp.json()
                 latency_ms = (time.perf_counter() - t0) * 1000.0
                 ans = data.get("answers", {}).get("q0", {})
-                prob = float(ans.get("noul", 0.5))
+                if "noul" not in ans:
+                    raise ValueError("Malformed response: missing 'noul' probability in answers")
+                prob = float(ans.get("noul"))
                 return JevDecision(
                     question=question,
                     probability=prob,
                     latency_ms=round(latency_ms, 2),
-                    model_version=data.get("model", "jev-latest")
+                    model_version=data.get("model", "jev-latest"),
+                    source="live",
+                    is_heuristic=False
                 )
         except Exception:
             prob = self._simulate_noul(state, question)
@@ -95,7 +103,9 @@ class JevClient:
                 question=question,
                 probability=prob,
                 latency_ms=round(latency_ms, 2),
-                model_version="jev-simulated-fallback"
+                model_version="jev-simulated-fallback",
+                source="heuristic",
+                is_heuristic=True
             )
 
     async def batch_evaluate_predicates(self, state: str, questions: List[str]) -> Dict[str, JevDecision]:

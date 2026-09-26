@@ -169,13 +169,17 @@ Add **Scholar Engine** to your favorite agentic tools:
 
 ---
 
+---
+
 ## 🛠️ FastMCP Tools Reference
 
 ### 1. `scholar_search`
-Quickly search arXiv for scientific papers by topic, keyword, or title.
+Quickly search arXiv for scientific papers by topic, keyword, or title, with optional publication year filtering.
 * **Arguments:**
   * `query` (str): Search topic or keywords (e.g. `"loaded latency wifi"`).
   * `limit` (int, default=5): Number of candidates to return.
+  * `year_min` (int, optional): Minimum publication year (e.g. `2022`).
+  * `year_max` (int, optional): Maximum publication year (e.g. `2026`).
 * **Returns:** Structured JSON list of IDs, titles, categories, abstracts, and PDF links.
 
 ### 2. `scholar_inspect`
@@ -184,17 +188,60 @@ Inspect a paper in detail by its arXiv ID. Merges OpenAlex citation metrics, aut
   * `paper_id` (str): arXiv paper ID (e.g. `"2007.07174"` or `"2306.04338"`).
 * **Returns:** Full abstract, categories, citation counts, DOI, OpenAlex ID, and cached semantic features.
 
-### 3. `scholar_research`
+### 3. `scholar_verify_claim`
+Verifies an empirical or scientific claim against a specific paper's full abstract/text. Extracts the most salient evidence passage with **exact character offsets** (`start_char`, `end_char`, `source_field`, `doc_id`).
+* **Arguments:**
+  * `claim` (str): Specific empirical proposition (e.g. `"Method achieves sub-5ms latency under load"`).
+  * `paper_id` (str): Paper ID to verify against.
+* **Returns:** Status (`supported`, `contradicted`, `unsupported`), probability score, provenance source (`live` vs `heuristic`), and exact evidence spans with character offsets.
+
+### 4. `scholar_verify_predicate`
+Directly evaluates a boolean or probabilistic proposition against any state or text passage using TypeSafe Jev System One semantics.
+* **Arguments:**
+  * `state_text` (str): Evidence or text passage to evaluate.
+  * `question` (str): Proposition question (e.g. `"Does this passage report an in-vivo experiment?"`).
+* **Returns:** Probability in `[0.0, 1.0]`, latency in ms, and provenance (`live` vs `heuristic`).
+
+### 5. `scholar_research`
 Autonomous scientific discovery loop:
 1. Discovers candidates on arXiv.
 2. Runs Jev System One semantic gatekeeper to filter out non-empirical or incompatible papers.
-3. Resolves citation graphs and verifies claims against evidence text.
+3. Resolves citation graphs and verifies claims against evidence text with exact spans.
 * **Arguments:**
   * `query` (str): Research question or engineering topic.
   * `domain` (str, default=`"general"`): Domain hint (e.g. `"wireless"`, `"databases"`, `"ai"`).
   * `threshold` (float, default=`0.50`): Minimum probability score required to pass semantic gates.
   * `limit` (int, default=`10`): Max candidates to evaluate.
-* **Returns:** Surviving evidence-backed papers with confidence metrics and screened-out audit breakdown.
+* **Returns:** Surviving evidence-backed papers with confidence metrics, exact evidence spans, and screened-out audit breakdown.
+
+---
+
+## 🏛️ Tri-Model AI Architectural Consensus (Claude, Codex, Gemini)
+
+Scholar Engine's v1.1 architecture was refined and audited through a structured 3-round AI debate among the frontier LLM families:
+- **Anthropic Claude (Fable 5.1 / Opus tier):** Systems safety, span-level character tracking, and CI regression harness.
+- **OpenAI Codex (GPT 6 Astra / Codex tier):** 3-stage verification pipeline (`Retrieval -> Extraction -> Assessment`), bounded MCP safety, and parameter isolation.
+- **Google Gemini (Gemini 3.8 Flash / Gemini 2.5 tier):** Context-aware metadata facets, audit trails for retractions, and multi-model resilience.
+
+Read the full unedited debate logs and architectural roadmap:
+- 📜 [Complete 3-Round Transcript (32 KB)](debates/001-scholar-engine-refinement/transcript.md)
+- 📋 [Authoritative Architectural Synthesis & Roadmap (12 KB)](debates/001-scholar-engine-refinement/synthesis.md)
+
+---
+
+## 🧪 CI Evaluation Harness & Test Suite
+
+Scholar Engine includes a comprehensive 50-benchmark evaluation harness in `tests/test_eval_harness.py`:
+- **Span Offset Integrity:** Verifies that extracted evidence spans match exact string slices in source documents.
+- **Contradiction Detection:** Tests active refutation and negation detection.
+- **Insufficient Evidence Abstention:** Validates that unrelated papers yield abstentions rather than false positives.
+- **Adversarial Resilience:** Tests resistance against prompt injection in untrusted academic text (e.g., instructions attempting to override verification thresholds).
+- **Provenance Demarcation:** Guarantees that every claim explicitly declares its source (`live` API vs `heuristic` fallback).
+
+Run the full test suite:
+```bash
+python -m pytest tests -v
+```
 
 ---
 
@@ -212,17 +259,6 @@ scholar inspect "1711.00455"
 # Run the autonomous semantic research loop
 scholar research "wireless loaded latency scheduler" --threshold 0.50 --limit 10
 ```
-
----
-
-## 🤝 Contributing & Community Roadmap
-
-We built Scholar Engine to bring rigorous scientific grounding to AI coding and research agents. We welcome contributions to make it even more capable!
-
-- [ ] **Domain Predicate Packs:** Community-curated semantic predicates for specific fields (Biomedical, Systems/Networking, Cryptography, Robotics).
-- [ ] **Local Small-Model Distillation:** Distill common predicate evaluations into local open-weights SLMs (e.g., local 0.5B - 3B models) for 100% offline edge execution.
-- [ ] **Roaring Bitmaps on DuckDB:** Materialize precomputed semantic indices across all 3.15M arXiv papers into compact Parquet bitmap columns.
-- [ ] **PubMed & bioRxiv Source Adapters:** Expand beyond arXiv into life sciences and medical literature.
 
 ---
 

@@ -105,19 +105,26 @@ class PostRAGVerifier:
         decision = await self.jev.evaluate_noul(state_text, support_q)
         prob = decision.probability
         claim.verification_probability = prob
+        claim.source = decision.source
+        claim.model_version = decision.model_version
+        claim.document_id = cited_evidence.paper_id or claim.paper_id
 
         if prob >= 0.80:
             claim.status = "supported"
+            claim.result_state = "verified" if decision.source == "live" else "heuristic"
         elif prob >= 0.50:
             claim.status = "partial"
+            claim.result_state = "verified" if decision.source == "live" else "heuristic"
         else:
             # Question 2: Is it actively contradicted?
             contra_q = "Does the evidence passage contradict or refute the claim?"
             contra_decision = await self.jev.evaluate_noul(state_text, contra_q)
             if contra_decision.probability >= 0.70:
                 claim.status = "contradicted"
+                claim.result_state = "contradicted"
             else:
                 claim.status = "unsupported"
+                claim.result_state = "unsupported"
 
         claim.supporting_evidence.append(cited_evidence)
         return claim

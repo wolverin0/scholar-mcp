@@ -15,12 +15,18 @@ engine = ScholarEngine()
 
 
 @mcp.tool()
-async def scholar_search(query: str, limit: int = 5) -> str:
+async def scholar_search(
+    query: str,
+    limit: int = 5,
+    year_min: int | None = None,
+    year_max: int | None = None
+) -> str:
     """
     Searches scientific papers on arXiv by topic, keywords, or title.
+    Supports optional year bounds (year_min, year_max).
     Returns structured list of paper IDs, titles, categories, and abstracts.
     """
-    papers = await engine.search_papers(query, limit=limit)
+    papers = await engine.search_papers(query, limit=limit, year_min=year_min, year_max=year_max)
     res = []
     for p in papers:
         res.append({
@@ -58,6 +64,61 @@ async def scholar_inspect(paper_id: str) -> str:
 
 
 @mcp.tool()
+async def scholar_verify_claim(claim: str, paper_id: str) -> str:
+    """
+    Verifies an empirical or scientific claim against a specific paper's full abstract/text.
+    Extracts the most salient evidence passage with exact character offsets.
+    Outputs strict status (supported, contradicted, unsupported), verification probability,
+    provenance (live vs. heuristic), and exact evidence spans.
+    """
+    checked = await engine.verify_custom_claim(claim, paper_id)
+    if not checked:
+        return json.dumps({"error": f"Paper {paper_id} could not be retrieved for claim verification."})
+
+    evidences = [
+        {
+            "paper_id": ev.paper_id,
+            "text": ev.text,
+            "start_char": ev.start_char,
+            "end_char": ev.end_char,
+            "source_field": ev.source_field,
+            "confidence": ev.confidence
+        }
+        for ev in checked.supporting_evidence
+    ]
+
+    res = {
+        "claim": checked.statement,
+        "paper_id": checked.paper_id,
+        "status": checked.status,
+        "result_state": checked.result_state,
+        "verification_probability": checked.verification_probability,
+        "source": checked.source,
+        "model_version": checked.model_version,
+        "evidence_spans": evidences
+    }
+    return json.dumps(res, indent=2)
+
+
+@mcp.tool()
+async def scholar_verify_predicate(state_text: str, question: str) -> str:
+    """
+    Directly evaluates a boolean or probabilistic proposition against any state or text passage.
+    Returns probability in [0.0, 1.0], decision latency, and provenance source (live vs heuristic).
+    """
+    decision = await engine.jev.evaluate_noul(state_text, question)
+    res = {
+        "question": decision.question,
+        "probability": decision.probability,
+        "latency_ms": decision.latency_ms,
+        "source": decision.source,
+        "is_heuristic": decision.is_heuristic,
+        "model_version": decision.model_version
+    }
+    return json.dumps(res, indent=2)
+
+
+@mcp.tool()
 async def scholar_research(
     query: str,
     domain: str = "general",
@@ -68,7 +129,7 @@ async def scholar_research(
     Executes an autonomous scientific research loop:
     1. Discovers candidates on arXiv.
     2. Runs Jev System One semantic gatekeeper to filter non-empirical/incompatible papers.
-    3. Fetches citation graphs and verifies claims against evidence text.
+    3. Fetches citation graphs and verifies claims against evidence text with exact spans.
     Returns surviving evidence-backed papers with confidence metrics.
     """
     predicates = [
@@ -89,7 +150,22 @@ async def scholar_research(
     surviving = []
     for p in report.surviving_papers:
         claims = [
-            {"statement": c.statement, "status": c.status, "prob": c.verification_probability}
+            {
+                "statement": c.statement,
+                "status": c.status,
+                "prob": c.verification_probability,
+                "source": c.source,
+                "result_state": c.result_state,
+                "evidence_spans": [
+                    {
+                        "start_char": ev.start_char,
+                        "end_char": ev.end_char,
+                        "source_field": ev.source_field,
+                        "text": ev.text
+                    }
+                    for ev in c.supporting_evidence
+                ]
+            }
             for c in p.claims
         ]
         surviving.append({
