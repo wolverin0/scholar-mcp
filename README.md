@@ -22,7 +22,7 @@ Vector search will return dozens of papers full of simulation equations or theor
 1. **Zero Storage Bloat:** Queries Hugging Face's 3.15M `arxiv-complete` Parquet dataset directly using **DuckDB HTTP range queries**. No need to download a 16 TB PDF corpus.
 2. **Citation Graph Enrichment:** Instantly pulls citation metrics and author graphs via **OpenAlex**.
 3. **Probabilistic Semantic Gates (Jev System One):** Natural language questions compile into persistent, 154ms probabilistic predicates (e.g. `P_real_hardware > 0.85`, `P_empirical > 0.75`).
-4. **Materialized Predicate Cache:** Evaluated predicates are cached in SQLite bitmaps so subsequent runs reuse past judgments with **zero inference cost**.
+4. **Materialized Predicate Cache:** Evaluated predicates are cached in SQLite so repeated evaluations reuse past judgments with **zero inference cost**. (The CLI and MCP server currently use an in-memory store, so the cache lasts for one process.)
 5. **Double Jev Gate (Pre-RAG & Post-RAG):**
    * **Pre-RAG:** Discards non-empirical or irrelevant papers before reading full text.
    * **Post-RAG:** Verifies every claim synthesized by the reasoning agent against extracted evidence passages (`supported`, `partial`, `unsupported`, `contradicted`).
@@ -95,9 +95,15 @@ flowchart TD
 git clone https://github.com/wolverin0/scholar-mcp.git
 cd scholar-mcp
 
-# Install dependencies (or install in a virtual environment)
-pip install -e .
+# Create a virtual environment and install runtime + test dependencies
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt "mcp<2"
 ```
+
+> **Install caveats (verified 2026-11-04, Python 3.13):**
+> * `pip install -e .` currently **fails**: setuptools' flat-layout auto-discovery finds two top-level packages (`scholar`, `debates`) and aborts. Until `pyproject.toml` declares its packages, install from `requirements.txt` and run the code from the repository root (or with `PYTHONPATH` pointing at it). For the same reason the `scholar` / `scholar-mcp` console scripts are not installed; use `python -m scholar.cli` and `python -m scholar.mcp.server`.
+> * `mcp>=1.0.0` now resolves to **mcp 2.x**, which removed `mcp.server.fastmcp`; the server then fails at import. Pin `mcp<2` (as above) until the server is migrated.
 
 ### 2. Configuration (`.env`)
 
@@ -113,19 +119,27 @@ cp .env.example .env
 TYPESAFE_API_KEY=your_typesafe_key_here
 ```
 
+The code reads `TYPESAFE_API_KEY` from the process environment only; `.env` is **not** loaded automatically (no `python-dotenv`). Export it in your shell (`set -a; source .env; set +a`) or pass it in the MCP client's `env` block.
+
 ### 3. Run Tests
 
-Verify everything is working locally:
+Verify everything is working locally (run from the repository root; 12 tests, no network or API key needed):
 
 ```bash
-pytest -v
+python -m pytest tests -v
+```
+
+### 4. Run the MCP server (stdio)
+
+```bash
+python -m scholar.mcp.server
 ```
 
 ---
 
 ## 🤖 MCP Server Setup
 
-Add **Scholar Engine** to your favorite agentic tools:
+Add **Scholar Engine** to your favorite agentic tools. Because the package cannot currently be installed (see Install caveats), use the Python interpreter of the virtual environment above as `command` and set `PYTHONPATH` to the absolute path of your clone:
 
 ### Claude Desktop (`claude_desktop_config.json`)
 ```json
@@ -135,6 +149,7 @@ Add **Scholar Engine** to your favorite agentic tools:
       "command": "python",
       "args": ["-m", "scholar.mcp.server"],
       "env": {
+        "PYTHONPATH": "/absolute/path/to/scholar-mcp",
         "TYPESAFE_API_KEY": "your_key_here"
       }
     }
@@ -148,7 +163,8 @@ Add **Scholar Engine** to your favorite agentic tools:
   "mcpServers": {
     "scholar": {
       "command": "python",
-      "args": ["-m", "scholar.mcp.server"]
+      "args": ["-m", "scholar.mcp.server"],
+      "env": { "PYTHONPATH": "/absolute/path/to/scholar-mcp" }
     }
   }
 }
@@ -161,13 +177,12 @@ Add **Scholar Engine** to your favorite agentic tools:
     "scholar": {
       "type": "stdio",
       "command": "python",
-      "args": ["-m", "scholar.mcp.server"]
+      "args": ["-m", "scholar.mcp.server"],
+      "env": { "PYTHONPATH": "/absolute/path/to/scholar-mcp" }
     }
   }
 }
 ```
-
----
 
 ---
 
@@ -209,7 +224,7 @@ Autonomous scientific discovery loop:
 3. Resolves citation graphs and verifies claims against evidence text with exact spans.
 * **Arguments:**
   * `query` (str): Research question or engineering topic.
-  * `domain` (str, default=`"general"`): Domain hint (e.g. `"wireless"`, `"databases"`, `"ai"`).
+  * `domain` (str, default=`"general"`): Domain hint (e.g. `"wireless"`, `"databases"`, `"ai"`). Currently accepted but not used by the engine.
   * `threshold` (float, default=`0.50`): Minimum probability score required to pass semantic gates.
   * `limit` (int, default=`10`): Max candidates to evaluate.
 * **Returns:** Surviving evidence-backed papers with confidence metrics, exact evidence spans, and screened-out audit breakdown.
@@ -231,7 +246,7 @@ Read the full unedited debate logs and architectural roadmap:
 
 ## 🧪 CI Evaluation Harness & Test Suite
 
-Scholar Engine includes a comprehensive 50-benchmark evaluation harness in `tests/test_eval_harness.py`:
+Scholar Engine includes an evaluation harness in `tests/test_eval_harness.py` (3 tests, one of which runs a 50-case benchmark matrix through `PostRAGVerifier`):
 - **Span Offset Integrity:** Verifies that extracted evidence spans match exact string slices in source documents.
 - **Contradiction Detection:** Tests active refutation and negation detection.
 - **Insufficient Evidence Abstention:** Validates that unrelated papers yield abstentions rather than false positives.
@@ -247,17 +262,17 @@ python -m pytest tests -v
 
 ## 💻 CLI Usage
 
-You can also use Scholar Engine directly from your terminal:
+You can also use Scholar Engine directly from your terminal (from the repository root; the `scholar` console script is only available once the package installs, see Install caveats):
 
 ```bash
 # Search arXiv papers
-scholar search "neural network verification" --limit 5
+python -m scholar.cli search "neural network verification" --limit 5
 
 # Inspect a paper with OpenAlex citation metrics
-scholar inspect "1711.00455"
+python -m scholar.cli inspect "1711.00455"
 
-# Run the autonomous semantic research loop
-scholar research "wireless loaded latency scheduler" --threshold 0.50 --limit 10
+# Run the autonomous semantic research loop (--domain defaults to "wireless")
+python -m scholar.cli research "wireless loaded latency scheduler" --threshold 0.50 --limit 10
 ```
 
 ---
