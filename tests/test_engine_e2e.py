@@ -149,3 +149,35 @@ async def test_research_topic_ranks_spans_by_query_and_only_attaches_evaluated_e
     for claim in report.verified_claims:
         for ev in claim.supporting_evidence:
             assert (claim.paper_id, ev.text) in evaluated_evidence_texts
+
+
+@pytest.mark.asyncio
+async def test_empty_abstract_returns_no_evidence_without_calling_jev():
+    engine = ScholarEngine(
+        predicate_store_path=":memory:",
+        jev_client=JevClient(force_simulation=True),
+    )
+    empty_paper = Paper(
+        id="2401.4001",
+        title="Paper Without Abstract",
+        abstract="   ",
+        categories=["cs.NI"],
+    )
+
+    with patch.object(engine.arxiv, "get_paper_by_id", new_callable=AsyncMock, return_value=empty_paper), \
+         patch.object(engine.openalex, "get_work_by_arxiv", new_callable=AsyncMock, return_value=None), \
+         patch.object(engine.jev, "evaluate_noul", new_callable=AsyncMock) as mock_jev:
+        custom_claim = await engine.verify_custom_claim("Achieves 99% accuracy", "2401.4001")
+        assert custom_claim is not None
+        assert custom_claim.status == "no_evidence"
+        assert custom_claim.supporting_evidence == []
+        assert mock_jev.call_count == 0
+
+    with patch.object(engine.arxiv, "search", new_callable=AsyncMock, return_value=[empty_paper]), \
+         patch.object(engine.openalex, "get_work_by_arxiv", new_callable=AsyncMock, return_value=None), \
+         patch.object(engine.verifier, "verify_claim", new_callable=AsyncMock) as mock_verify:
+        report = await engine.research_topic("accuracy", predicates=[], max_candidates=1)
+        assert len(report.verified_claims) == 1
+        assert report.verified_claims[0].status == "no_evidence"
+        assert report.verified_claims[0].supporting_evidence == []
+        assert mock_verify.call_count == 0

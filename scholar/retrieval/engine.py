@@ -62,21 +62,31 @@ class ScholarEngine:
         Extracts salient evidence passages with exact character offsets from the full abstract.
         Prevents arbitrary truncation and maintains precise document provenance.
         """
-        abstract = paper.abstract.strip()
-        if not abstract:
+        raw_abstract = paper.abstract
+        if not raw_abstract.strip():
             return []
-            
-        import re
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', abstract) if len(s.strip()) > 20]
+
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', raw_abstract.strip()) if len(s.strip()) > 20]
+        if not sentences:
+            sentences = [raw_abstract.strip()]
+
         evidences: List[Evidence] = []
+        cursor = 0
         for s in sentences:
-            start_pos = abstract.find(s)
-            end_pos = start_pos + len(s) if start_pos != -1 else len(s)
+            start_pos = raw_abstract.find(s, cursor)
+            if start_pos == -1:
+                start_pos = raw_abstract.find(s)
+            if start_pos != -1:
+                end_pos = start_pos + len(s)
+                cursor = end_pos
+            else:
+                start_pos = 0
+                end_pos = len(s)
             evidences.append(Evidence(
                 paper_id=paper.id,
                 section="abstract",
                 text=s,
-                start_char=start_pos if start_pos != -1 else 0,
+                start_char=start_pos,
                 end_char=end_pos,
                 source_field="abstract",
                 doc_id=paper.id,
@@ -164,6 +174,20 @@ class ScholarEngine:
 
         return paper
 
+    @staticmethod
+    def _no_evidence_claim(claim_id: str, statement: str, paper_id: str) -> Claim:
+        return Claim(
+            id=claim_id,
+            statement=statement,
+            paper_id=paper_id,
+            status="no_evidence",
+            verification_probability=0.0,
+            supporting_evidence=[],
+            source="none",
+            result_state="unsupported",
+            document_id=paper_id,
+        )
+
     async def verify_custom_claim(self, claim_statement: str, paper_id: str) -> Optional[Claim]:
         """
         Verifies a user or agent-provided claim against a specific paper's full abstract/text.
@@ -174,21 +198,13 @@ class ScholarEngine:
             return None
 
         spans = self.extract_evidence_spans(paper)
+        claim_id = f"claim_{paper.id}_{int(time.time())}"
         if not spans:
-            evidence = Evidence(
-                paper_id=paper.id,
-                section="abstract",
-                text=paper.abstract,
-                start_char=0,
-                end_char=len(paper.abstract),
-                source_field="abstract",
-                doc_id=paper.id
-            )
-        else:
-            evidence = self.rank_evidence_spans(spans, claim_statement, top_k=1)[0]
+            return self._no_evidence_claim(claim_id, claim_statement, paper.id)
 
+        evidence = self.rank_evidence_spans(spans, claim_statement, top_k=1)[0]
         claim = Claim(
-            id=f"claim_{paper.id}_{int(time.time())}",
+            id=claim_id,
             statement=claim_statement,
             paper_id=paper.id,
             document_id=paper.id
@@ -228,18 +244,17 @@ class ScholarEngine:
         verified_claims: List[Claim] = []
         for paper in survivors:
             spans = self.extract_evidence_spans(paper, query)
-            top_spans = self.rank_evidence_spans(spans, query, top_k=2) if spans else [
-                Evidence(
-                    paper_id=paper.id,
-                    section="abstract",
-                    text=paper.abstract,
-                    start_char=0,
-                    end_char=len(paper.abstract),
-                    source_field="abstract",
-                    doc_id=paper.id
+            if not spans:
+                no_ev_claim = self._no_evidence_claim(
+                    f"claim_{paper.id}_0",
+                    f"Relevance evidence for '{query}' in '{paper.title}'",
+                    paper.id,
                 )
-            ]
+                paper.claims.append(no_ev_claim)
+                verified_claims.append(no_ev_claim)
+                continue
 
+            top_spans = self.rank_evidence_spans(spans, query, top_k=2)
             for idx, span in enumerate(top_spans):
                 claim_stmt = (
                     f"Relevance evidence for '{query}' in '{paper.title}': {span.text}"
@@ -256,7 +271,7 @@ class ScholarEngine:
 
         duration = round(time.perf_counter() - t0, 3)
         heuristic_evaluations = gate_report.heuristic_count + sum(
-            1 for c in verified_claims if c.source != "live"
+            1 for c in verified_claims if c.source == "heuristic"
         )
         warning = None
         if heuristic_evaluations > 0 or self.jev.is_simulated:

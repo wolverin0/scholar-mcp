@@ -97,6 +97,21 @@ async def test_evidence_span_character_offsets_integrity():
 
 
 @pytest.mark.asyncio
+async def test_evidence_span_duplicate_sentence_uses_distinct_offsets():
+    dup = "Latency drops under loaded traffic."
+    mid = "Hardware measurements confirm stability."
+    abstract = f"{dup} {mid} {dup}"
+    paper = Paper(id="test_dup_01", title="Duplicate Span Test", abstract=abstract)
+
+    spans = ScholarEngine.extract_evidence_spans(paper)
+    assert len(spans) == 3
+    offsets = [(s.start_char, s.end_char) for s in spans]
+    assert len(set(offsets)) == 3
+    for s in spans:
+        assert abstract[s.start_char:s.end_char] == s.text
+
+
+@pytest.mark.asyncio
 async def test_provenance_demarcation_contract():
     """
     Verifies that claims explicitly declare their verification source and result_state.
