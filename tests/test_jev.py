@@ -1,3 +1,6 @@
+import json
+import logging
+import httpx
 import pytest
 from scholar.core.papers import Paper, Claim, Evidence
 from scholar.core.predicates import SemanticPredicate, PredicateStore
@@ -72,3 +75,93 @@ async def test_post_rag_verifier():
     assert verified.status in ["supported", "partial"]
     assert verified.verification_probability is not None
     assert verified.verification_probability > 0.40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code,payload",
+    [
+        (401, {"error": "unauthorized"}),
+        (500, {"error": "server error"}),
+        (200, {"model": "jev-latest", "answers": {"q0": {}}}),
+        (200, {"model": "jev-latest", "answers": {"q0": {"noul": 1.7}}}),
+        (200, {"model": "jev-latest", "answers": {"q0": {"noul": "NaN"}}}),
+    ],
+)
+async def test_jev_client_http_and_payload_fallbacks_log_warning(caplog, status_code, payload):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code=status_code, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    client = JevClient(api_key="test-key", transport=transport)
+
+    with caplog.at_level(logging.WARNING, logger="scholar.jev.client"):
+        decision = await client.evaluate_noul(
+            "We deployed prototype hardware on an outdoor testbed.",
+            "Does this paper evaluate real hardware?",
+        )
+
+    assert decision.source == "heuristic"
+    assert decision.is_heuristic is True
+    assert decision.model_version == "jev-simulated-fallback"
+    assert any("falling back to heuristic" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_jev_client_valid_live_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={"model": "jev-latest", "answers": {"q0": {"noul": 0.87}}},
+        )
+
+    client = JevClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    decision = await client.evaluate_noul("Some evidence", "Some question?")
+
+    assert decision.source == "live"
+    assert decision.is_heuristic is False
+    assert decision.probability == 0.87
+    assert decision.model_version == "jev-latest"
+
+
+@pytest.mark.asyncio
+async def test_jev_batch_missing_answer_falls_back_with_warning(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={"model": "jev-latest", "answers": {"q_0": {"noul": 0.9}}},
+        )
+
+    client = JevClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    questions = ["First question?", "Second question?"]
+
+    with caplog.at_level(logging.WARNING, logger="scholar.jev.client"):
+        res = await client.batch_evaluate_predicates("Testbed hardware evidence.", questions)
+
+    assert len(res) == 2
+    assert all(dec.source == "heuristic" and dec.is_heuristic for dec in res.values())
+    assert any("falling back to heuristic" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_jev_batch_valid_live_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert set(body["questions"].keys()) == {"q_0", "q_1"}
+        return httpx.Response(
+            status_code=200,
+            json={
+                "model": "jev-latest",
+                "answers": {"q_0": {"noul": 0.91}, "q_1": {"noul": 0.22}},
+            },
+        )
+
+    client = JevClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    res = await client.batch_evaluate_predicates("Evidence", ["Q1?", "Q2?"])
+
+    assert res["Q1?"].source == "live"
+    assert res["Q1?"].is_heuristic is False
+    assert res["Q1?"].probability == 0.91
+    assert res["Q2?"].source == "live"
+    assert res["Q2?"].is_heuristic is False
+    assert res["Q2?"].probability == 0.22
