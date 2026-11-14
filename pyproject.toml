@@ -26,3 +26,8 @@ dev = [
 [project.scripts]
 scholar = "scholar.cli:main"
 scholar-mcp = "scholar.mcp.server:main"
+
+[tool.pytest.ini_options]
+markers = [
+    "live: marks tests calling external APIs and requiring network or API keys (deselect with '-m \"not live\"')",
+]
