@@ -56,7 +56,7 @@ async def test_pre_rag_gate_filtering():
 
 @pytest.mark.asyncio
 async def test_post_rag_verifier():
-    client = JevClient()
+    client = JevClient(force_simulation=True)
     verifier = PostRAGVerifier(client)
 
     evidence = Evidence(
@@ -72,9 +72,84 @@ async def test_post_rag_verifier():
     )
 
     verified = await verifier.verify_claim(claim, evidence)
-    assert verified.status in ["supported", "partial"]
+    assert verified.source == "heuristic"
+    assert verified.status == "unverified_heuristic"
+    assert verified.result_state == "heuristic"
     assert verified.verification_probability is not None
     assert verified.verification_probability > 0.40
+
+
+@pytest.mark.asyncio
+async def test_post_rag_verifier_live_supported():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={"model": "jev-latest", "answers": {"q0": {"noul": 0.92}}},
+        )
+
+    client = JevClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    verifier = PostRAGVerifier(client)
+    evidence = Evidence(
+        paper_id="2401.0001",
+        section="results",
+        text="Loaded latency dropped by 68% on hardware."
+    )
+    claim = Claim(id="c1", statement="Latency dropped on hardware.", paper_id="2401.0001")
+
+    verified = await verifier.verify_claim(claim, evidence)
+    assert verified.source == "live"
+    assert verified.status == "supported"
+    assert verified.result_state == "verified"
+
+
+@pytest.mark.asyncio
+async def test_pre_rag_gate_never_serves_heuristic_cache_or_cross_question_to_live():
+    store = PredicateStore(":memory:")
+    paper = Paper(
+        id="2401.5555",
+        title="Outdoor Testbed Measurement Study",
+        abstract="We evaluate prototype CPE hardware on a real wireless testbed."
+    )
+
+    # 1. Run simulated gate first
+    sim_gate = PreRAGGate(JevClient(force_simulation=True), store)
+    pred_a = SemanticPredicate(
+        id="P_applicable",
+        question="Are the methods applicable to: wireless latency?",
+        default_threshold=0.50,
+    )
+    sim_report = await sim_gate.screen_papers([paper], [pred_a])
+    assert sim_report.heuristic_count == 1
+    assert paper.semantic_sources["P_applicable"] == "heuristic"
+
+    # 2. Live gate with a DIFFERENT question under the same predicate_id must call Jev live, not use cache
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        calls.append(body["questions"]["q0"]["instructions"])
+        return httpx.Response(
+            status_code=200,
+            json={"model": "jev-latest", "answers": {"q0": {"noul": 0.88}}},
+        )
+
+    live_gate = PreRAGGate(JevClient(api_key="test-key", transport=httpx.MockTransport(handler)), store)
+    pred_b = SemanticPredicate(
+        id="P_applicable",
+        question="Are the methods applicable to: graph neural networks?",
+        default_threshold=0.50,
+    )
+    live_report = await live_gate.screen_papers([paper], [pred_b])
+    assert len(calls) == 1
+    assert live_report.heuristic_count == 0
+    assert paper.semantic_sources["P_applicable"] == "live"
+    assert paper.semantic_features["P_applicable"] == 0.88
+
+    # 3. Same question with live gate DOES hit the cache (no extra HTTP call)
+    cached_report = await live_gate.screen_papers([paper], [pred_b])
+    assert len(calls) == 1
+    assert cached_report.heuristic_count == 0
+    assert paper.semantic_features["P_applicable"] == 0.88
 
 
 @pytest.mark.asyncio

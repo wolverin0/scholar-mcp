@@ -46,6 +46,12 @@ async def run_cli():
         sys.exit(1)
 
     engine = ScholarEngine()
+    if engine.jev.is_simulated:
+        print(
+            "[!] WARNING: TYPESAFE_API_KEY not set. Running in unverified heuristic mode "
+            "(outputs are NOT live-verified).",
+            file=sys.stderr,
+        )
 
     if args.command == "search":
         print(f"[*] Searching arXiv for: '{args.query}' (limit={args.limit})...")
@@ -74,7 +80,8 @@ async def run_cli():
         if paper.semantic_features:
             print("\n--- Semantic Predicates ---")
             for k, v in paper.semantic_features.items():
-                print(f"    {k}: {v:.2f}")
+                src = paper.semantic_sources.get(k, "unknown")
+                print(f"    {k}: {v:.2f} (source={src})")
 
     elif args.command == "research":
         print(f"[*] Initiating autonomous research on: '{args.query}' (threshold={args.threshold})...")
@@ -97,6 +104,8 @@ async def run_cli():
         print(f"    Candidates Found: {report.total_candidates_found}")
         print(f"    Passed Gatekeeper: {report.surviving_papers_count}")
         print(f"    Rejected: {len(report.rejection_reasons)}")
+        if report.warning:
+            print(f"[!] WARNING: {report.warning}")
 
         if report.rejection_reasons:
             print("\n--- Gatekeeper Screened Out ---")
@@ -107,9 +116,14 @@ async def run_cli():
             print("\n=== Surviving Evidence-Backed Papers ===")
             for p in report.surviving_papers:
                 print(f"\n* [{p.id}] {p.title} (Citations: {p.citations_count})")
-                print(f"  P(Empirical): {p.semantic_features.get('P_empirical', 0):.2f} | P(Applicable): {p.semantic_features.get('P_applicable', 0):.2f}")
+                emp_src = p.semantic_sources.get("P_empirical", "unknown")
+                app_src = p.semantic_sources.get("P_applicable", "unknown")
+                print(
+                    f"  P(Empirical): {p.semantic_features.get('P_empirical', 0):.2f} ({emp_src}) | "
+                    f"P(Applicable): {p.semantic_features.get('P_applicable', 0):.2f} ({app_src})"
+                )
                 for c in p.claims:
-                    print(f"  Claim Status: [{c.status.upper()}] (P={c.verification_probability or 0:.2f})")
+                    print(f"  Claim Status: [{c.status.upper()}] (source={c.source}, P={c.verification_probability or 0:.2f})")
 
 
 def main():

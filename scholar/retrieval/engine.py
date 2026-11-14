@@ -24,6 +24,8 @@ class ResearchReport(BaseModel):
     surviving_papers: List[Paper]
     rejection_reasons: Dict[str, List[str]]
     verified_claims: List[Claim] = Field(default_factory=list)
+    heuristic_evaluations: int = 0
+    warning: Optional[str] = None
     execution_duration_sec: float
 
 
@@ -35,12 +37,13 @@ class ScholarEngine:
     def __init__(
         self,
         predicate_store_path: str = ":memory:",
-        typesafe_api_key: Optional[str] = None
+        typesafe_api_key: Optional[str] = None,
+        jev_client: Optional[JevClient] = None,
     ):
         self.arxiv = ArxivAPIClient()
         self.openalex = OpenAlexClient()
         self.duckdb_hf = DuckDBHuggingFaceClient()
-        self.jev = JevClient(api_key=typesafe_api_key)
+        self.jev = jev_client or JevClient(api_key=typesafe_api_key)
         self.store = PredicateStore(predicate_store_path)
         self.gate = PreRAGGate(self.jev, self.store)
         self.verifier = PostRAGVerifier(self.jev)
@@ -121,9 +124,11 @@ class ScholarEngine:
             if work.doi:
                 paper.doi = work.doi
 
-        # Attach stored predicates
+        # Attach stored predicates (live cached only)
         stored_preds = self.store.get_paper_predicates(paper.id)
         paper.semantic_features.update(stored_preds)
+        for pred_id in stored_preds:
+            paper.semantic_sources[pred_id] = "live"
 
         return paper
 
@@ -219,6 +224,16 @@ class ScholarEngine:
             verified_claims.append(checked_claim)
 
         duration = round(time.perf_counter() - t0, 3)
+        heuristic_evaluations = gate_report.heuristic_count + sum(
+            1 for c in verified_claims if c.source != "live"
+        )
+        warning = None
+        if heuristic_evaluations > 0 or self.jev.is_simulated:
+            warning = (
+                "Results include unverified heuristic evaluations "
+                "(TYPESAFE_API_KEY not set or Jev API unavailable). "
+                "Do not treat heuristic outputs as verified claims."
+            )
 
         return ResearchReport(
             query=query,
@@ -227,5 +242,7 @@ class ScholarEngine:
             surviving_papers=survivors,
             rejection_reasons=gate_report.rejection_reasons,
             verified_claims=verified_claims,
+            heuristic_evaluations=heuristic_evaluations,
+            warning=warning,
             execution_duration_sec=duration
         )

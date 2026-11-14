@@ -55,3 +55,64 @@ def test_predicate_store_sqlite():
     assert "2401.12345" in passing
     failing = store.filter_papers_by_threshold("P_real_hw", 0.98)
     assert "2401.12345" not in failing
+
+
+def test_predicate_store_migrates_legacy_schema(tmp_path):
+    import sqlite3
+
+    db_file = tmp_path / "legacy_predicates.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute("""
+        CREATE TABLE predicates (
+            id TEXT PRIMARY KEY,
+            question TEXT NOT NULL,
+            domain TEXT,
+            default_threshold REAL,
+            created_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE predicate_results (
+            predicate_id TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            probability REAL NOT NULL,
+            confidence REAL,
+            model TEXT,
+            latency_ms REAL,
+            created_at TEXT,
+            PRIMARY KEY (predicate_id, paper_id)
+        )
+    """)
+    conn.execute(
+        "INSERT INTO predicate_results VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("P_legacy", "2401.9999", 0.91, 1.0, "jev-simulated-v1", 1.2, "2026-01-01T00:00:00+00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    store = PredicateStore(str(db_file))
+    # Legacy simulated row must not be served as live
+    assert store.get_result("P_legacy", "2401.9999") is None
+
+    # New live rows with same predicate_id and different question hashes coexist cleanly
+    store.record_result(PredicateResult(
+        predicate_id="P_legacy",
+        question_hash="hash_a",
+        paper_id="2401.9999",
+        probability=0.88,
+        model="jev-latest",
+        source="live",
+    ))
+    store.record_result(PredicateResult(
+        predicate_id="P_legacy",
+        question_hash="hash_b",
+        paper_id="2401.9999",
+        probability=0.22,
+        model="jev-latest",
+        source="live",
+    ))
+    with store._get_conn() as c:
+        rows = c.execute(
+            "SELECT question_hash, probability, source FROM predicate_results WHERE predicate_id = 'P_legacy'"
+        ).fetchall()
+    assert len(rows) == 3

@@ -5,13 +5,22 @@ Exposes high-level research capabilities to Claude Code, Codex, Antigravity, and
 
 from __future__ import annotations
 import json
+import logging
+import os
 from mcp.server.fastmcp import FastMCP
 from scholar.retrieval.engine import ScholarEngine
 from scholar.core.predicates import SemanticPredicate
 
+logger = logging.getLogger(__name__)
+
 # Initialize FastMCP application
 mcp = FastMCP("ScholarEngine", dependencies=["httpx", "pydantic", "duckdb"])
 engine = ScholarEngine()
+
+if engine.jev.is_simulated:
+    logger.warning(
+        "ScholarEngine started without TYPESAFE_API_KEY; running in unverified heuristic mode."
+    )
 
 
 @mcp.tool()
@@ -58,8 +67,11 @@ async def scholar_inspect(paper_id: str) -> str:
         "citations_count": paper.citations_count,
         "openalex_id": paper.openalex_id,
         "doi": paper.doi,
-        "semantic_features": paper.semantic_features
+        "semantic_features": paper.semantic_features,
+        "semantic_sources": paper.semantic_sources,
     }
+    if any(src != "live" for src in paper.semantic_sources.values()):
+        res["warning"] = "Some semantic features were evaluated using unverified heuristics."
     return json.dumps(res, indent=2)
 
 
@@ -93,10 +105,17 @@ async def scholar_verify_claim(claim: str, paper_id: str) -> str:
         "status": checked.status,
         "result_state": checked.result_state,
         "verification_probability": checked.verification_probability,
+        "contradiction_probability": checked.contradiction_probability,
+        "contradiction_source": checked.contradiction_source,
         "source": checked.source,
         "model_version": checked.model_version,
         "evidence_spans": evidences
     }
+    if checked.source != "live":
+        res["warning"] = (
+            "Verification used unverified local heuristics "
+            "(TYPESAFE_API_KEY not set or Jev API unavailable)."
+        )
     return json.dumps(res, indent=2)
 
 
@@ -115,6 +134,11 @@ async def scholar_verify_predicate(state_text: str, question: str) -> str:
         "is_heuristic": decision.is_heuristic,
         "model_version": decision.model_version
     }
+    if decision.source != "live":
+        res["warning"] = (
+            "Evaluation used unverified local heuristics "
+            "(TYPESAFE_API_KEY not set or Jev API unavailable)."
+        )
     return json.dumps(res, indent=2)
 
 
@@ -173,6 +197,7 @@ async def scholar_research(
             "title": p.title,
             "citations": p.citations_count,
             "semantic_features": p.semantic_features,
+            "semantic_sources": p.semantic_sources,
             "claims": claims
         })
 
@@ -181,14 +206,21 @@ async def scholar_research(
         "duration_sec": report.execution_duration_sec,
         "candidates_found": report.total_candidates_found,
         "passed_gatekeeper": report.surviving_papers_count,
+        "heuristic_evaluations": report.heuristic_evaluations,
         "surviving_papers": surviving,
         "screened_out_count": len(report.rejection_reasons),
         "rejection_sample": {k: v for k, v in list(report.rejection_reasons.items())[:3]}
     }
+    if report.warning:
+        output["warning"] = report.warning
     return json.dumps(output, indent=2)
 
 
 def main():
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        logger.warning(
+            "TYPESAFE_API_KEY is not set; ScholarEngine MCP tools will emit heuristic evaluations marked unverified_heuristic."
+        )
     mcp.run()
 
 
