@@ -95,11 +95,13 @@ async def run_cli(
             SemanticPredicate(
                 id="P_empirical",
                 question="Does this work present empirical evaluations or experimental measurements?",
+                domain=args.domain,
                 default_threshold=args.threshold
             ),
             SemanticPredicate(
                 id="P_applicable",
                 question=f"Are the methods or results in this paper applicable to: {args.query}?",
+                domain=args.domain,
                 default_threshold=args.threshold
             )
         ]

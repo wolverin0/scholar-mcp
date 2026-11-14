@@ -234,3 +234,23 @@ async def test_inspect_paper_handles_openalex_id_without_raising():
     assert paper is not None
     assert paper.id == "openalex:W4242"
     assert paper.provenance_source == "openalex"
+
+
+@pytest.mark.asyncio
+async def test_verify_custom_claim_generates_unique_uuid_claim_ids():
+    engine = ScholarEngine(
+        predicate_store_path=":memory:",
+        jev_client=JevClient(force_simulation=True),
+    )
+    paper = Paper(
+        id="2401.7777",
+        title="UUID Claim Test",
+        abstract="We evaluate real hardware on an outdoor testbed achieving low latency.",
+    )
+    with patch.object(engine.arxiv, "get_paper_by_id", new_callable=AsyncMock, return_value=paper), \
+         patch.object(engine.openalex, "get_work_by_arxiv", new_callable=AsyncMock, return_value=None):
+        c1 = await engine.verify_custom_claim("Hardware testbed achieves low latency", "2401.7777")
+        c2 = await engine.verify_custom_claim("Hardware testbed achieves low latency", "2401.7777")
+
+    assert c1 is not None and c2 is not None
+    assert c1.id != c2.id

@@ -8,6 +8,7 @@ import asyncio
 import logging
 import re
 import time
+import uuid
 import duckdb
 import httpx
 from typing import List, Dict, Optional
@@ -247,7 +248,7 @@ class ScholarEngine:
             return None
 
         spans = self.extract_evidence_spans(paper)
-        claim_id = f"claim_{paper.id}_{int(time.time())}"
+        claim_id = f"claim_{paper.id}_{uuid.uuid4().hex[:8]}"
         if not spans:
             return self._no_evidence_claim(claim_id, claim_statement, paper.id)
 

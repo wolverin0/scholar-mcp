@@ -172,39 +172,6 @@ class OpenAlexClient:
                 return None
             return self._parse_work(results[0])
 
-    async def get_citation_graph(self, openalex_id: str) -> Dict[str, Any]:
-        """
-        Fetches both referenced works (predecessors) and citing works (successors).
-        """
-        work_id = openalex_id.split("/")[-1]
-        url = f"{OPENALEX_API_URL}/works/{work_id}"
-
-        async with self._make_http_client() as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                return {"references": [], "cited_by": []}
-            work_data = resp.json()
-            refs = work_data.get("referenced_works", [])
-
-            cites_url = f"{OPENALEX_API_URL}/works"
-            cites_params = {"filter": f"cites:{work_id}", "per-page": 10}
-            cites_resp = await client.get(cites_url, params=cites_params)
-            citing_works = []
-            if cites_resp.status_code == 200:
-                c_data = cites_resp.json()
-                for c in c_data.get("results", []):
-                    citing_works.append({
-                        "id": c.get("id"),
-                        "title": c.get("title"),
-                        "year": c.get("publication_year"),
-                        "cited_by_count": c.get("cited_by_count")
-                    })
-
-            return {
-                "references": refs,
-                "cited_by": citing_works
-            }
-
     def _parse_work(self, item: Dict[str, Any]) -> OpenAlexWork:
         topics = []
         for t in item.get("topics", []):

@@ -148,3 +148,35 @@ def test_scholar_engine_injected_jev_client_ignores_env_api_key(monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "should-not-be-used")
     engine = ScholarEngine(jev_client=JevClient(force_simulation=True))
     assert engine.jev.is_simulated is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_validate_limit_and_threshold_bounds():
+    fake = _make_fake_engine()
+    with patch.object(server, "get_engine", return_value=fake):
+        with pytest.raises(ValueError, match="limit"):
+            await server.scholar_search("test", limit=10**6)
+        with pytest.raises(ValueError, match="limit"):
+            await server.scholar_search("test", limit=0)
+        with pytest.raises(ValueError, match="limit"):
+            await server.scholar_research("test", limit=10**6)
+        with pytest.raises(ValueError, match="threshold"):
+            await server.scholar_research("test", threshold=1.5)
+        with pytest.raises(ValueError, match="threshold"):
+            await server.scholar_research("test", threshold=-0.1)
+
+
+@pytest.mark.asyncio
+async def test_mcp_scholar_research_propagates_domain_and_removes_dead_citation_graph():
+    from scholar.sources.openalex import OpenAlexClient
+
+    assert not hasattr(OpenAlexClient, "get_citation_graph")
+
+    fake = _make_fake_engine()
+    with patch.object(server, "get_engine", return_value=fake):
+        res = json.loads(
+            await server.scholar_research("wireless latency", domain="wireless", threshold=0.5, limit=5)
+        )
+    assert res["domain"] == "wireless"
+    preds = fake.research_topic.call_args.args[1]
+    assert all(p.domain == "wireless" for p in preds)

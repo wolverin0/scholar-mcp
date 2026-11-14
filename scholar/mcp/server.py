@@ -6,6 +6,7 @@ Exposes high-level research capabilities to Claude Code, Codex, Antigravity, and
 from __future__ import annotations
 import json
 import logging
+import math
 import os
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
@@ -31,6 +32,18 @@ def get_engine() -> ScholarEngine:
     return _engine
 
 
+def _validate_limit(limit: int) -> int:
+    if isinstance(limit, bool) or not 1 <= limit <= 50:
+        raise ValueError(f"limit must be between 1 and 50, got {limit!r}")
+    return limit
+
+
+def _validate_threshold(threshold: float) -> float:
+    if isinstance(threshold, bool) or not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"threshold must be between 0.0 and 1.0, got {threshold!r}")
+    return threshold
+
+
 @mcp.tool()
 async def scholar_search(
     query: str,
@@ -43,6 +56,7 @@ async def scholar_search(
     Supports optional year bounds (year_min, year_max).
     Returns structured list of paper IDs, titles, categories, and abstracts.
     """
+    limit = _validate_limit(limit)
     papers = await get_engine().search_papers(query, limit=limit, year_min=year_min, year_max=year_max)
     res = []
     for p in papers:
@@ -164,15 +178,19 @@ async def scholar_research(
     3. Fetches citation graphs and verifies claims against evidence text with exact spans.
     Returns surviving evidence-backed papers with confidence metrics.
     """
+    limit = _validate_limit(limit)
+    threshold = _validate_threshold(threshold)
     predicates = [
         SemanticPredicate(
             id="P_empirical",
             question="Does this work present empirical evaluations or experimental measurements?",
+            domain=domain,
             default_threshold=threshold
         ),
         SemanticPredicate(
             id="P_applicable",
             question=f"Are the methods or results in this paper applicable to: {query}?",
+            domain=domain,
             default_threshold=threshold
         )
     ]
@@ -212,6 +230,7 @@ async def scholar_research(
 
     output = {
         "query": query,
+        "domain": domain,
         "duration_sec": report.execution_duration_sec,
         "candidates_found": report.total_candidates_found,
         "passed_gatekeeper": report.surviving_papers_count,
