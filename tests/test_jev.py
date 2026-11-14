@@ -82,9 +82,12 @@ async def test_post_rag_verifier():
 @pytest.mark.asyncio
 async def test_post_rag_verifier_live_supported():
     def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        q = body["questions"]["q0"]["instructions"].lower()
+        prob = 0.05 if "contradict" in q else 0.92
         return httpx.Response(
             status_code=200,
-            json={"model": "jev-latest", "answers": {"q0": {"noul": 0.92}}},
+            json={"model": "jev-latest", "answers": {"q0": {"noul": prob}}},
         )
 
     client = JevClient(api_key="test-key", transport=httpx.MockTransport(handler))
@@ -278,3 +281,27 @@ async def test_jev_simulation_word_boundary_routing_avoids_false_branches():
     ml_q = "Are the methods or results in this paper applicable to: machine learning?"
     ml_dec = await client.evaluate_noul(mac_paper, ml_q)
     assert ml_dec.probability < 0.25
+
+
+@pytest.mark.asyncio
+async def test_post_rag_verifier_always_evaluates_contradiction_even_when_support_ge_05():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        q = body["questions"]["q0"]["instructions"].lower()
+        prob = 0.90 if "contradict" in q else 0.60
+        return httpx.Response(
+            status_code=200,
+            json={"model": "jev-latest", "answers": {"q0": {"noul": prob}}},
+        )
+
+    client = JevClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    verifier = PostRAGVerifier(client)
+    evidence = Evidence(paper_id="2401.8001", text="Method X fails to reduce latency.")
+    claim = Claim(id="c_8", statement="Method X reduces latency.", paper_id="2401.8001")
+
+    verified = await verifier.verify_claim(claim, evidence)
+    assert verified.source == "live"
+    assert verified.status == "contradicted"
+    assert verified.result_state == "contradicted"
+    assert verified.verification_probability == 0.60
+    assert verified.contradiction_probability == 0.90

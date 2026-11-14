@@ -178,6 +178,7 @@ async def scholar_research(
                 "statement": c.statement,
                 "status": c.status,
                 "prob": c.verification_probability,
+                "contradiction_probability": c.contradiction_probability,
                 "source": c.source,
                 "result_state": c.result_state,
                 "evidence_spans": [
