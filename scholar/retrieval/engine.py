@@ -4,8 +4,11 @@ Coordinates broad search, Jev semantic gating, citation expansion, and verificat
 """
 
 from __future__ import annotations
+import asyncio
+import logging
 import re
 import time
+import duckdb
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
 
@@ -16,6 +19,8 @@ from scholar.sources.openalex import OpenAlexClient, OpenAlexWork
 from scholar.sources.duckdb_hf import DuckDBHuggingFaceClient
 from scholar.jev.client import JevClient
 from scholar.jev.gates import PreRAGGate, PostRAGVerifier, GateEvaluationReport
+
+logger = logging.getLogger(__name__)
 
 
 _STOPWORDS = frozenset({
@@ -153,8 +158,12 @@ class ScholarEngine:
         """
         paper = await self.arxiv.get_paper_by_id(paper_id)
         if not paper:
-            # Fallback to DuckDB Parquet
-            paper = self.duckdb_hf.query_paper_metadata_by_id(paper_id)
+            # Fallback to DuckDB Parquet in worker thread so event loop is never blocked
+            try:
+                paper = await asyncio.to_thread(self.duckdb_hf.query_paper_metadata_by_id, paper_id)
+            except duckdb.Error as exc:
+                logger.warning("DuckDB fallback lookup failed for %s: %s", paper_id, exc)
+                paper = None
             if not paper:
                 return None
 
