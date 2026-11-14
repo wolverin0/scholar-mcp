@@ -223,8 +223,8 @@ class JevClient:
         # Claim verification check (Post-RAG)
         if "evidence passage" in state_lower and "claim to verify" in state_lower:
             parts = state_lower.split("claim to verify:")
-            evidence_part = parts[0].replace("evidence passage:", "").strip()
-            claim_part = parts[1].strip() if len(parts) > 1 else ""
+            evidence_part = re.sub(r"</?(?:untrusted_evidence|claim)>", " ", parts[0].replace("evidence passage:", "")).strip()
+            claim_part = re.sub(r"</?(?:untrusted_evidence|claim)>", " ", parts[1]).strip() if len(parts) > 1 else ""
 
             if "contradict" in q_lower:
                 # check for opposing terms
