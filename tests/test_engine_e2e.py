@@ -83,7 +83,7 @@ async def test_mcp_scholar_research_emits_warning_and_never_supported_when_simul
             categories=["cs.NI"],
         )
     ]
-    with patch.object(server, "engine", sim_engine), \
+    with patch.object(server, "get_engine", return_value=sim_engine), \
          patch.object(sim_engine.arxiv, "search", new_callable=AsyncMock, return_value=mock_papers), \
          patch.object(sim_engine.openalex, "get_work_by_arxiv", new_callable=AsyncMock, return_value=None):
         raw = await server.scholar_research(query="wireless testbed", limit=1)

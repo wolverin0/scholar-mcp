@@ -10,16 +10,16 @@ import re
 import time
 import duckdb
 import httpx
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 
 from scholar.core.papers import Paper, Claim, Evidence
 from scholar.core.predicates import SemanticPredicate, PredicateStore
 from scholar.sources.arxiv_api import ArxivAPIClient
-from scholar.sources.openalex import OpenAlexClient, OpenAlexWork
+from scholar.sources.openalex import OpenAlexClient
 from scholar.sources.duckdb_hf import DuckDBHuggingFaceClient
 from scholar.jev.client import JevClient
-from scholar.jev.gates import PreRAGGate, PostRAGVerifier, GateEvaluationReport
+from scholar.jev.gates import PreRAGGate, PostRAGVerifier
 
 logger = logging.getLogger(__name__)
 

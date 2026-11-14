@@ -1,5 +1,4 @@
-import pytest
-from scholar.core.papers import Paper, Author, Claim, Evidence
+from scholar.core.papers import Paper
 from scholar.core.predicates import SemanticPredicate, PredicateResult, PredicateStore
 
 

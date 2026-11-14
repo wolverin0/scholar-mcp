@@ -4,7 +4,7 @@ Covers papers, authors, citations, semantic predicates, claims, and evidence.
 """
 
 from __future__ import annotations
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 

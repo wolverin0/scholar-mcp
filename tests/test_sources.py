@@ -72,7 +72,7 @@ def test_duckdb_hf_local_parquet():
         ('2401.12345', 'Sample Paper', 'Abstract text here', 'cs.NI cs.IT', 'Author Name', '2024-01-15')
     """)
 
-    client = DuckDBHuggingFaceClient(db_instance=conn)
+    DuckDBHuggingFaceClient(db_instance=conn)
     # Test query using table override
     res = conn.execute("SELECT id, title, abstract, categories, authors, update_date FROM sample_metadata WHERE id = '2401.12345'").fetchone()
     assert res is not None

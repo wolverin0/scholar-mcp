@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import argparse
+from typing import List, Optional
 from scholar.retrieval.engine import ScholarEngine
 from scholar.core.predicates import SemanticPredicate
 
@@ -37,15 +38,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def run_cli():
+async def run_cli(
+    argv: Optional[List[str]] = None,
+    engine: Optional[ScholarEngine] = None,
+):
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
         sys.exit(1)
 
-    engine = ScholarEngine()
+    if engine is None:
+        engine = ScholarEngine()
     if engine.jev.is_simulated:
         print(
             "[!] WARNING: TYPESAFE_API_KEY not set. Running in unverified heuristic mode "
@@ -126,8 +131,8 @@ async def run_cli():
                     print(f"  Claim Status: [{c.status.upper()}] (source={c.source}, P={c.verification_probability or 0:.2f})")
 
 
-def main():
-    asyncio.run(run_cli())
+def main(argv: Optional[List[str]] = None):
+    asyncio.run(run_cli(argv=argv))
 
 
 if __name__ == "__main__":

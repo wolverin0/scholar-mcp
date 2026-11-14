@@ -7,7 +7,7 @@ Post-RAG: Evaluates generated claims against cited evidence text to eliminate ha
 from __future__ import annotations
 import asyncio
 import re
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 from scholar.core.papers import Paper, Claim, Evidence
 from scholar.core.predicates import SemanticPredicate, PredicateResult, PredicateStore, hash_question

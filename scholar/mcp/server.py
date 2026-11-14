@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from scholar.retrieval.engine import ScholarEngine
 from scholar.core.predicates import SemanticPredicate
@@ -15,12 +16,19 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastMCP application
 mcp = FastMCP("ScholarEngine", dependencies=["httpx", "pydantic", "duckdb"])
-engine = ScholarEngine()
+_engine: Optional[ScholarEngine] = None
 
-if engine.jev.is_simulated:
-    logger.warning(
-        "ScholarEngine started without TYPESAFE_API_KEY; running in unverified heuristic mode."
-    )
+
+def get_engine() -> ScholarEngine:
+    """Lazily creates and returns the shared ScholarEngine instance."""
+    global _engine
+    if _engine is None:
+        _engine = ScholarEngine()
+        if _engine.jev.is_simulated:
+            logger.warning(
+                "ScholarEngine started without TYPESAFE_API_KEY; running in unverified heuristic mode."
+            )
+    return _engine
 
 
 @mcp.tool()
@@ -35,7 +43,7 @@ async def scholar_search(
     Supports optional year bounds (year_min, year_max).
     Returns structured list of paper IDs, titles, categories, and abstracts.
     """
-    papers = await engine.search_papers(query, limit=limit, year_min=year_min, year_max=year_max)
+    papers = await get_engine().search_papers(query, limit=limit, year_min=year_min, year_max=year_max)
     res = []
     for p in papers:
         res.append({
@@ -55,7 +63,7 @@ async def scholar_inspect(paper_id: str) -> str:
     Inspects a specific scientific paper by arXiv ID.
     Merges OpenAlex citation metrics, authors, and stored semantic predicates.
     """
-    paper = await engine.inspect_paper(paper_id)
+    paper = await get_engine().inspect_paper(paper_id)
     if not paper:
         return json.dumps({"error": f"Paper {paper_id} not found."})
 
@@ -83,7 +91,7 @@ async def scholar_verify_claim(claim: str, paper_id: str) -> str:
     Outputs strict status (supported, contradicted, unsupported), verification probability,
     provenance (live vs. heuristic), and exact evidence spans.
     """
-    checked = await engine.verify_custom_claim(claim, paper_id)
+    checked = await get_engine().verify_custom_claim(claim, paper_id)
     if not checked:
         return json.dumps({"error": f"Paper {paper_id} could not be retrieved for claim verification."})
 
@@ -125,7 +133,7 @@ async def scholar_verify_predicate(state_text: str, question: str) -> str:
     Directly evaluates a boolean or probabilistic proposition against any state or text passage.
     Returns probability in [0.0, 1.0], decision latency, and provenance source (live vs heuristic).
     """
-    decision = await engine.jev.evaluate_noul(state_text, question)
+    decision = await get_engine().jev.evaluate_noul(state_text, question)
     res = {
         "question": decision.question,
         "probability": decision.probability,
@@ -169,7 +177,7 @@ async def scholar_research(
         )
     ]
 
-    report = await engine.research_topic(query, predicates, max_candidates=limit)
+    report = await get_engine().research_topic(query, predicates, max_candidates=limit)
     
     surviving = []
     for p in report.surviving_papers:
