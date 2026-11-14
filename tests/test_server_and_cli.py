@@ -80,6 +80,15 @@ def _make_fake_engine() -> MagicMock:
     return fake
 
 
+def test_import_scholar_mcp_server_exposes_fastmcp():
+    import importlib
+    from mcp.server.fastmcp import FastMCP
+
+    mod = importlib.import_module("scholar.mcp.server")
+    assert isinstance(mod.mcp, FastMCP)
+    assert hasattr(mod, "main")
+
+
 def test_server_uses_lazy_get_engine():
     assert hasattr(server, "get_engine")
     assert server._engine is None
