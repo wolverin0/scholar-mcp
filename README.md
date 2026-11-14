@@ -36,7 +36,7 @@ Vector search will return dozens of papers full of simulation equations or theor
 | **Primary Interface** | **Local FastMCP Server** | Local MCP | Python library / CLI | Web App / Closed SaaS |
 | **Search Speed** | **Sub-second to ~3s** | ~1-2s | 30s - 90s | ~5s |
 | **Query Cost** | **<$0.001 (or $0 simulation)**| Free (Rate-limited API) | $1.00 - $5.00+ / run | Monthly Subscription |
-| **Full-text LaTeX Access** | **Yes (DuckDB HTTP Range)** | ❌ (Abstract only) | Yes (Downloads full PDFs) | Proprietary Index |
+| **Full-text LaTeX Access** | ❌ (Abstract & metadata via DuckDB Parquet) | ❌ (Abstract only) | Yes (Downloads full PDFs) | Proprietary Index |
 | **Semantic Predicate Filtering** | **Yes (Jev System One)** | ❌ None | ❌ None | Heuristic filters |
 | **Predicate Bitmaps Cache** | **Yes (SQLite)** | ❌ None | ❌ None | ❌ None |
 | **Claim-Evidence Verification** | **Yes (Post-RAG Verifier)** | ❌ None | Yes (Heavy LLM loop) | Simple score |
@@ -52,7 +52,7 @@ flowchart TD
         ARXIV["arXiv Atom API (Search & Metadata)"]
         OPENALEX["OpenAlex Graph API (Citations & Authors)"]
         HF["Hugging Face arxiv-complete (3.15M Papers)"]
-        DUCKDB["DuckDB HTTP Range Scanner (Targeted LaTeX fetch)"]
+        DUCKDB["DuckDB HTTP Range Scanner (Metadata parquet fetch)"]
         HF --> DUCKDB
     end
 
@@ -95,15 +95,13 @@ flowchart TD
 git clone https://github.com/wolverin0/scholar-mcp.git
 cd scholar-mcp
 
-# Create a virtual environment and install runtime + test dependencies
+# Create a virtual environment and install package + dev dependencies
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt "mcp<2"
+pip install -e ".[dev]" "mcp<2"
 ```
 
-> **Install caveats (verified 2026-11-04, Python 3.13):**
-> * `pip install -e .` currently **fails**: setuptools' flat-layout auto-discovery finds two top-level packages (`scholar`, `debates`) and aborts. Until `pyproject.toml` declares its packages, install from `requirements.txt` and run the code from the repository root (or with `PYTHONPATH` pointing at it). For the same reason the `scholar` / `scholar-mcp` console scripts are not installed; use `python -m scholar.cli` and `python -m scholar.mcp.server`.
-> * `mcp>=1.0.0` now resolves to **mcp 2.x**, which removed `mcp.server.fastmcp`; the server then fails at import. Pin `mcp<2` (as above) until the server is migrated.
+> **Note:** `mcp>=1.0.0` may resolve to **mcp 2.x** if unconstrained, which removed `mcp.server.fastmcp`; pin `mcp<2` until the server is migrated.
 
 ### 2. Configuration (`.env`)
 
@@ -233,7 +231,7 @@ Autonomous scientific discovery loop:
 
 ## 🏛️ Tri-Model AI Architectural Consensus (Claude, Codex, Gemini)
 
-Scholar Engine's v1.1 architecture was refined and audited through a structured 3-round AI debate among the frontier LLM families:
+Scholar Engine's v1.1 design incorporates recommendations from a 3-round AI architectural debate (note: full semantic verification accuracy, contradiction detection, and prompt-injection resilience require a live `TYPESAFE_API_KEY`; offline heuristic mode marks all claims `unverified_heuristic`):
 - **Anthropic Claude (Fable 5.1 / Opus tier):** Systems safety, span-level character tracking, and CI regression harness.
 - **OpenAI Codex (GPT 6 Astra / Codex tier):** 3-stage verification pipeline (`Retrieval -> Extraction -> Assessment`), bounded MCP safety, and parameter isolation.
 - **Google Gemini (Gemini 3.8 Flash / Gemini 2.5 tier):** Context-aware metadata facets, audit trails for retractions, and multi-model resilience.
@@ -246,16 +244,14 @@ Read the full unedited debate logs and architectural roadmap:
 
 ## 🧪 CI Evaluation Harness & Test Suite
 
-Scholar Engine includes an evaluation harness in `tests/test_eval_harness.py` (3 tests, one of which runs a 50-case benchmark matrix through `PostRAGVerifier`):
+Scholar Engine includes a 50-case evaluation harness in `tests/test_eval_harness.py` covering:
 - **Span Offset Integrity:** Verifies that extracted evidence spans match exact string slices in source documents.
-- **Contradiction Detection:** Tests active refutation and negation detection.
-- **Insufficient Evidence Abstention:** Validates that unrelated papers yield abstentions rather than false positives.
-- **Adversarial Resilience:** Tests resistance against prompt injection in untrusted academic text (e.g., instructions attempting to override verification thresholds).
-- **Provenance Demarcation:** Guarantees that every claim explicitly declares its source (`live` API vs `heuristic` fallback).
+- **Provenance Demarcation:** Guarantees that every claim explicitly declares its source (`live` API vs `heuristic` fallback), and offline heuristics emit `unverified_heuristic` instead of `supported`/`partial`.
+- **Live Semantic Benchmark (`@pytest.mark.live`):** Evaluates direct empirical support (15), explicit contradictions (15), insufficient evidence (10), and adversarial prompt injections (10) when `TYPESAFE_API_KEY` is provided (marked `xfail` in offline heuristic mode).
 
-Run the full test suite:
+Run the offline test suite:
 ```bash
-python -m pytest tests -v
+python -m pytest tests -m "not live" -v
 ```
 
 ---

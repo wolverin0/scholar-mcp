@@ -9,6 +9,8 @@ Benchmark suite validating:
 - Provenance & heuristic demarcation integrity
 """
 
+import os
+import httpx
 import pytest
 from scholar.core.papers import Paper, Claim, Evidence
 from scholar.jev.client import JevClient
@@ -95,6 +97,21 @@ async def test_evidence_span_character_offsets_integrity():
 
 
 @pytest.mark.asyncio
+async def test_evidence_span_duplicate_sentence_uses_distinct_offsets():
+    dup = "Latency drops under loaded traffic."
+    mid = "Hardware measurements confirm stability."
+    abstract = f"{dup} {mid} {dup}"
+    paper = Paper(id="test_dup_01", title="Duplicate Span Test", abstract=abstract)
+
+    spans = ScholarEngine.extract_evidence_spans(paper)
+    assert len(spans) == 3
+    offsets = [(s.start_char, s.end_char) for s in spans]
+    assert len(set(offsets)) == 3
+    for s in spans:
+        assert abstract[s.start_char:s.end_char] == s.text
+
+
+@pytest.mark.asyncio
 async def test_provenance_demarcation_contract():
     """
     Verifies that claims explicitly declare their verification source and result_state.
@@ -125,18 +142,15 @@ async def test_provenance_demarcation_contract():
     assert checked.verification_probability is not None
 
 
-@pytest.mark.asyncio
-async def test_50_benchmark_eval_cases():
-    """
-    Runs the full 50-case benchmark evaluation suite through PostRAGVerifier.
-    Measures accuracy, contradiction detection, and injection resistance.
-    """
-    jev = JevClient(force_simulation=True)
-    verifier = PostRAGVerifier(jev)
-    
-    results = {"pass": 0, "fail": 0}
-    
-    for case in BENCHMARK_CASES:
+async def run_benchmark_suite(verifier: PostRAGVerifier, cases=BENCHMARK_CASES) -> dict[str, tuple[int, int]]:
+    category_totals: dict[str, int] = {}
+    category_hits: dict[str, int] = {}
+    failures: list[str] = []
+
+    for case in cases:
+        cat = case["category"]
+        category_totals[cat] = category_totals.get(cat, 0) + 1
+
         evidence = Evidence(
             paper_id=case["id"],
             section="abstract",
@@ -151,13 +165,81 @@ async def test_50_benchmark_eval_cases():
             statement=case["claim"],
             paper_id=case["id"]
         )
-        
-        checked = await verifier.verify_claim(claim, evidence)
-        
-        # Check that prompt injections did not trick the verifier into false support
-        if case["category"] == "adversarial":
-            assert checked.status != "supported", f"Adversarial injection succeeded on case {case['id']}"
-            
-        results["pass"] += 1
 
-    assert results["pass"] == 50, f"Expected 50 passed benchmark evaluations, got {results['pass']}"
+        checked = await verifier.verify_claim(claim, evidence)
+
+        if cat == "adversarial":
+            assert checked.status != "supported", f"Adversarial injection succeeded on case {case['id']}"
+
+        if checked.status in case["expected_status"]:
+            category_hits[cat] = category_hits.get(cat, 0) + 1
+        else:
+            failures.append(f"{case['id']} ({cat}): got {checked.status}, expected {case['expected_status']}")
+
+    summary = ", ".join(
+        f"{cat}: {category_hits.get(cat, 0)}/{total}"
+        for cat, total in category_totals.items()
+    )
+    assert not failures, f"Benchmark failed ({summary}); sample failures: {failures[:5]}"
+    return {cat: (category_hits.get(cat, 0), total) for cat, total in category_totals.items()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="Heuristic mode emits unverified_heuristic instead of semantic support/contradiction; live Jev API required.",
+)
+async def test_50_benchmark_eval_cases():
+    """
+    Runs the full 50-case benchmark evaluation suite through PostRAGVerifier in heuristic mode.
+    Expected to fail semantic accuracy assertions because heuristic mode refuses to emit supported/partial.
+    """
+    jev = JevClient(force_simulation=True)
+    verifier = PostRAGVerifier(jev)
+    await run_benchmark_suite(verifier)
+
+
+@pytest.mark.asyncio
+async def test_50_benchmark_eval_cases_heuristic_never_claims_verified():
+    """Verifies heuristic mode honestly marks all 50 cases as unverified_heuristic."""
+    jev = JevClient(force_simulation=True)
+    verifier = PostRAGVerifier(jev)
+    for case in BENCHMARK_CASES:
+        evidence = Evidence(
+            paper_id=case["id"],
+            section="abstract",
+            text=case["abstract"],
+            start_char=0,
+            end_char=len(case["abstract"]),
+            source_field="abstract",
+            doc_id=case["id"],
+        )
+        claim = Claim(id=f"c_{case['id']}", statement=case["claim"], paper_id=case["id"])
+        checked = await verifier.verify_claim(claim, evidence)
+        assert checked.source == "heuristic"
+        assert checked.status == "unverified_heuristic"
+
+
+@pytest.mark.asyncio
+async def test_eval_harness_breaks_when_case_fails():
+    """Forces a support case to fail and verifies the harness raises AssertionError."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={"model": "jev-latest", "answers": {"q0": {"noul": 0.10}}},
+        )
+
+    client = JevClient(api_key="fake-key", transport=httpx.MockTransport(handler))
+    verifier = PostRAGVerifier(client)
+    with pytest.raises(AssertionError, match="support: 0/1"):
+        await run_benchmark_suite(verifier, cases=[BENCHMARK_CASES[0]])
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("TYPESAFE_API_KEY"), reason="TYPESAFE_API_KEY not set")
+@pytest.mark.asyncio
+async def test_50_benchmark_eval_cases_live():
+    """Runs the 50-case semantic evaluation harness against live Jev System One."""
+    jev = JevClient()
+    verifier = PostRAGVerifier(jev)
+    await run_benchmark_suite(verifier)

@@ -4,7 +4,7 @@ Covers papers, authors, citations, semantic predicates, claims, and evidence.
 """
 
 from __future__ import annotations
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 
@@ -43,13 +43,15 @@ class Claim(BaseModel):
     paper_id: str
     status: str = Field(
         default="pending",
-        description="Status: supported, partial, unsupported, contradicted"
+        description="Status: supported, partial, unsupported, contradicted, unverified_heuristic, no_evidence"
     )
     verification_probability: Optional[float] = None
+    contradiction_probability: Optional[float] = None
+    contradiction_source: Optional[str] = None
     supporting_evidence: List[Evidence] = Field(default_factory=list)
     source: str = Field(
         default="heuristic",
-        description="Verification source: 'live' (real API / LLM) or 'heuristic' (local fallback)"
+        description="Verification source: 'live' (real API / LLM), 'heuristic' (local fallback), or 'none'"
     )
     result_state: str = Field(
         default="heuristic",
@@ -81,6 +83,10 @@ class Paper(BaseModel):
     semantic_features: Dict[str, float] = Field(
         default_factory=dict,
         description="Keyed by predicate name/id, value is probability [0.0, 1.0]"
+    )
+    semantic_sources: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Keyed by predicate name/id, value is provenance source ('live' or 'heuristic')"
     )
     claims: List[Claim] = Field(default_factory=list)
     
