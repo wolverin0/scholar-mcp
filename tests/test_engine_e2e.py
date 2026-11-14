@@ -94,3 +94,58 @@ async def test_mcp_scholar_research_emits_warning_and_never_supported_when_simul
         for c in p["claims"]:
             assert c["status"] == "unverified_heuristic"
             assert c["status"] not in ("supported", "partial")
+
+
+@pytest.mark.asyncio
+async def test_research_topic_ranks_spans_by_query_and_only_attaches_evaluated_evidence():
+    engine = ScholarEngine(
+        predicate_store_path=":memory:",
+        jev_client=JevClient(force_simulation=True),
+    )
+    shared_first = "Modern communication systems face diverse operational constraints in deployment."
+    paper_a = Paper(
+        id="2401.3001",
+        title="Paper A",
+        abstract=(
+            f"{shared_first} "
+            "Our field evaluation measures loaded latency and wifi airtime scheduling on real hardware."
+        ),
+        categories=["cs.NI"],
+    )
+    paper_b = Paper(
+        id="2401.3002",
+        title="Paper B",
+        abstract=(
+            f"{shared_first} "
+            "We analyze thermal noise bounds in superconducting microwave cavities on hardware."
+        ),
+        categories=["cs.NI"],
+    )
+
+    evaluated_evidence_texts: list[tuple[str, str]] = []
+    orig_verify = engine.verifier.verify_claim
+
+    async def spy_verify(claim, cited_evidence):
+        evaluated_evidence_texts.append((claim.paper_id, cited_evidence.text))
+        return await orig_verify(claim, cited_evidence)
+
+    predicates = [
+        SemanticPredicate(id="P_hw", question="Does this paper evaluate real hardware?", default_threshold=0.5)
+    ]
+    with patch.object(engine.arxiv, "search", new_callable=AsyncMock, return_value=[paper_a, paper_b]), \
+         patch.object(engine.openalex, "get_work_by_arxiv", new_callable=AsyncMock, return_value=None), \
+         patch.object(engine.verifier, "verify_claim", side_effect=spy_verify):
+        report = await engine.research_topic("loaded latency wifi", predicates, max_candidates=2)
+
+    assert len(report.surviving_papers) == 2
+    claims_by_paper = {p.id: p.claims for p in report.surviving_papers}
+    # Paper A's top-ranked evidence must be its query-relevant second sentence, not the shared first sentence
+    assert "loaded latency" in claims_by_paper["2401.3001"][0].supporting_evidence[0].text
+    assert (
+        claims_by_paper["2401.3001"][0].supporting_evidence[0].text
+        != claims_by_paper["2401.3002"][0].supporting_evidence[0].text
+    )
+    # Every span in supporting_evidence across all claims must have been evaluated by verify_claim
+    for claim in report.verified_claims:
+        for ev in claim.supporting_evidence:
+            assert (claim.paper_id, ev.text) in evaluated_evidence_texts

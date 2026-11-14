@@ -4,6 +4,7 @@ Coordinates broad search, Jev semantic gating, citation expansion, and verificat
 """
 
 from __future__ import annotations
+import re
 import time
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
@@ -15,6 +16,13 @@ from scholar.sources.openalex import OpenAlexClient, OpenAlexWork
 from scholar.sources.duckdb_hf import DuckDBHuggingFaceClient
 from scholar.jev.client import JevClient
 from scholar.jev.gates import PreRAGGate, PostRAGVerifier, GateEvaluationReport
+
+
+_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have",
+    "in", "is", "it", "its", "of", "on", "or", "our", "paper", "study", "that",
+    "the", "their", "this", "to", "was", "we", "were", "with",
+})
 
 
 class ResearchReport(BaseModel):
@@ -75,6 +83,30 @@ class ScholarEngine:
                 confidence=1.0
             ))
         return evidences
+
+    @staticmethod
+    def _content_tokens(text: str) -> set[str]:
+        tokens = set(re.findall(r"\w+", text.lower()))
+        filtered = {t for t in tokens if t not in _STOPWORDS and len(t) > 1}
+        return filtered or tokens
+
+    @classmethod
+    def rank_evidence_spans(
+        cls,
+        spans: List[Evidence],
+        query_text: str,
+        top_k: Optional[int] = None,
+    ) -> List[Evidence]:
+        """Ranks evidence spans by stopword-filtered token overlap with query_text."""
+        if not spans:
+            return []
+        target_tokens = cls._content_tokens(query_text)
+        ranked = sorted(
+            spans,
+            key=lambda s: len(target_tokens.intersection(cls._content_tokens(s.text))),
+            reverse=True,
+        )
+        return ranked[:top_k] if top_k is not None else ranked
 
     async def search_papers(
         self,
@@ -137,11 +169,10 @@ class ScholarEngine:
         Verifies a user or agent-provided claim against a specific paper's full abstract/text.
         Identifies the best matching evidence span with exact character offsets.
         """
-        import re
         paper = await self.inspect_paper(paper_id)
         if not paper:
             return None
-            
+
         spans = self.extract_evidence_spans(paper)
         if not spans:
             evidence = Evidence(
@@ -154,9 +185,7 @@ class ScholarEngine:
                 doc_id=paper.id
             )
         else:
-            claim_words = set(re.findall(r'\w+', claim_statement.lower()))
-            best_span = max(spans, key=lambda s: len(claim_words.intersection(set(re.findall(r'\w+', s.text.lower())))))
-            evidence = best_span
+            evidence = self.rank_evidence_spans(spans, claim_statement, top_k=1)[0]
 
         claim = Claim(
             id=f"claim_{paper.id}_{int(time.time())}",
@@ -195,33 +224,35 @@ class ScholarEngine:
                 paper.openalex_id = work.openalex_id
                 paper.citations_count = work.cited_by_count
 
-        # Step 4: Verification of candidate findings / claims with exact spans
+        # Step 4: Verification of top-k query-relevant spans (only evaluated spans attached)
         verified_claims: List[Claim] = []
         for paper in survivors:
             spans = self.extract_evidence_spans(paper, query)
-            primary_evidence = spans[0] if spans else Evidence(
-                paper_id=paper.id,
-                section="abstract",
-                text=paper.abstract,
-                start_char=0,
-                end_char=len(paper.abstract),
-                source_field="abstract",
-                doc_id=paper.id
-            )
-            
-            claim_stmt = f"Paper '{paper.title}' establishes verifiable methodologies or empirical outcomes for {query}."
-            claim = Claim(
-                id=f"claim_{paper.id}",
-                statement=claim_stmt,
-                paper_id=paper.id,
-                document_id=paper.id
-            )
-            checked_claim = await self.verifier.verify_claim(claim, primary_evidence)
-            if len(spans) > 1:
-                checked_claim.supporting_evidence.extend(spans[1:3])
-                
-            paper.claims.append(checked_claim)
-            verified_claims.append(checked_claim)
+            top_spans = self.rank_evidence_spans(spans, query, top_k=2) if spans else [
+                Evidence(
+                    paper_id=paper.id,
+                    section="abstract",
+                    text=paper.abstract,
+                    start_char=0,
+                    end_char=len(paper.abstract),
+                    source_field="abstract",
+                    doc_id=paper.id
+                )
+            ]
+
+            for idx, span in enumerate(top_spans):
+                claim_stmt = (
+                    f"Relevance evidence for '{query}' in '{paper.title}': {span.text}"
+                )
+                claim = Claim(
+                    id=f"claim_{paper.id}_{idx}",
+                    statement=claim_stmt,
+                    paper_id=paper.id,
+                    document_id=paper.id
+                )
+                checked_claim = await self.verifier.verify_claim(claim, span)
+                paper.claims.append(checked_claim)
+                verified_claims.append(checked_claim)
 
         duration = round(time.perf_counter() - t0, 3)
         heuristic_evaluations = gate_report.heuristic_count + sum(
