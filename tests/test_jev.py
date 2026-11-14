@@ -34,7 +34,7 @@ async def test_pre_rag_gate_filtering():
     paper_sim = Paper(
         id="2401.0002",
         title="Theoretical Bounds on Queueing in Abstract Networks",
-        abstract="This is a purely theoretical paper with NS-3 simulation only. No hardware experiments."
+        abstract="This is a purely theoretical paper with NS-3 simulation only and synthetic models."
     )
 
     predicates = [
@@ -165,3 +165,21 @@ async def test_jev_batch_valid_live_response():
     assert res["Q2?"].source == "live"
     assert res["Q2?"].is_heuristic is False
     assert res["Q2?"].probability == 0.22
+
+
+@pytest.mark.asyncio
+async def test_jev_simulation_precedence_ns3_with_testbed_scores_high():
+    client = JevClient(force_simulation=True)
+    question = "Does this paper evaluate real hardware?"
+
+    hybrid_text = (
+        "We compare NS-3 models against our outdoor testbed with real hardware, "
+        "CPE nodes, and field measurements."
+    )
+    sim_only_text = "This study relies on simulation only with synthetic Poisson traffic."
+
+    hybrid_dec = await client.evaluate_noul(hybrid_text, question)
+    sim_dec = await client.evaluate_noul(sim_only_text, question)
+
+    assert hybrid_dec.probability > 0.75
+    assert sim_dec.probability < 0.20

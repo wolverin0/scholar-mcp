@@ -20,7 +20,7 @@ async def test_scholar_engine_research_loop_mocked():
         Paper(
             id="2401.1002",
             title="Abstract Graph Flow Simulations",
-            abstract="Pure simulation only with synthetic traffic models. No testbed measurements.",
+            abstract="Pure simulation only with synthetic traffic models and analytical bounds.",
             categories=["cs.NI"]
         )
     ]

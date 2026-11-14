@@ -201,7 +201,7 @@ class JevClient:
         if "real hardware" in q_lower or "experimental" in q_lower or "testbed" in q_lower:
             keywords = ["testbed", "hardware", "cpe", "access point", "prototype", "deployed", "measurements", "in the wild", "qca", "atheros", "mikrotik"]
             matches = sum(1 for kw in keywords if kw in state_lower)
-            if "simulation only" in state_lower or "ns-3" in state_lower or "matlab" in state_lower and matches == 0:
+            if ("simulation only" in state_lower or "ns-3" in state_lower or "matlab" in state_lower) and matches == 0:
                 return 0.08
             return min(0.98, 0.40 + matches * 0.15) if matches > 0 else 0.12
 
