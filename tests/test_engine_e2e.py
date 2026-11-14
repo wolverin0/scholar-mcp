@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from unittest.mock import AsyncMock, patch
 from scholar.retrieval.engine import ScholarEngine
@@ -181,3 +182,55 @@ async def test_empty_abstract_returns_no_evidence_without_calling_jev():
         assert report.verified_claims[0].status == "no_evidence"
         assert report.verified_claims[0].supporting_evidence == []
         assert mock_verify.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_research_topic_falls_back_to_openalex_when_arxiv_raises():
+    engine = ScholarEngine(
+        predicate_store_path=":memory:",
+        jev_client=JevClient(force_simulation=True),
+    )
+    oa_paper = Paper(
+        id="openalex:W4242",
+        title="OpenAlex Fallback Hardware Study",
+        abstract="We evaluate prototype hardware on an outdoor testbed with field measurements.",
+        openalex_id="https://openalex.org/W4242",
+        citations_count=19,
+        provenance_source="openalex",
+    )
+    predicates = [
+        SemanticPredicate(id="P_hw", question="Does this paper evaluate real hardware?", default_threshold=0.5)
+    ]
+
+    with patch.object(engine.arxiv, "search", new_callable=AsyncMock, side_effect=httpx.TimeoutException("arXiv timeout")), \
+         patch.object(engine.openalex, "search_works", new_callable=AsyncMock, return_value=[oa_paper]) as mock_oa:
+        report = await engine.research_topic("hardware testbed", predicates, max_candidates=5)
+
+    assert mock_oa.call_count == 1
+    assert report.total_candidates_found == 1
+    assert report.surviving_papers_count == 1
+    assert report.surviving_papers[0].id == "openalex:W4242"
+    assert report.surviving_papers[0].provenance_source == "openalex"
+
+
+@pytest.mark.asyncio
+async def test_inspect_paper_handles_openalex_id_without_raising():
+    engine = ScholarEngine(
+        predicate_store_path=":memory:",
+        jev_client=JevClient(force_simulation=True),
+    )
+    oa_paper = Paper(
+        id="openalex:W4242",
+        title="OpenAlex Paper",
+        abstract="Detailed abstract text.",
+        openalex_id="https://openalex.org/W4242",
+        citations_count=11,
+        provenance_source="openalex",
+    )
+
+    with patch.object(engine.openalex, "get_work_by_id", new_callable=AsyncMock, return_value=oa_paper):
+        paper = await engine.inspect_paper("openalex:W4242")
+
+    assert paper is not None
+    assert paper.id == "openalex:W4242"
+    assert paper.provenance_source == "openalex"

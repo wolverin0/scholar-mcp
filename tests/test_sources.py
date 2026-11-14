@@ -139,3 +139,35 @@ def test_duckdb_hf_live_partition_schema():
     # Verifies the remote Hugging Face parquet partition schema is readable
     res = client.search_metadata_by_category("cs.NI", limit=1)
     assert isinstance(res, list)
+
+
+@pytest.mark.asyncio
+async def test_openalex_search_works_sets_provenance_and_reconstructs_abstract():
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "results": [
+                    {
+                        "id": "https://openalex.org/W4242",
+                        "doi": "https://doi.org/10.1000/test",
+                        "title": "OpenAlex Wireless Study",
+                        "cited_by_count": 17,
+                        "publication_year": 2025,
+                        "abstract_inverted_index": {"Loaded": [0], "latency": [1], "improves.": [2]},
+                        "authorships": [{"author": {"display_name": "Ada Lovelace"}, "institutions": []}],
+                        "topics": [{"display_name": "Wireless Networks"}],
+                    }
+                ]
+            },
+        )
+
+    client = OpenAlexClient(transport=httpx.MockTransport(handler))
+    papers = await client.search_works("loaded latency", limit=5)
+    assert len(papers) == 1
+    assert papers[0].id == "openalex:W4242"
+    assert papers[0].provenance_source == "openalex"
+    assert papers[0].abstract == "Loaded latency improves."
+    assert papers[0].citations_count == 17

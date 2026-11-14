@@ -9,6 +9,7 @@ import logging
 import re
 import time
 import duckdb
+import httpx
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
 
@@ -123,6 +124,23 @@ class ScholarEngine:
         )
         return ranked[:top_k] if top_k is not None else ranked
 
+    async def _search_with_fallback(self, query: str, max_results: int) -> List[Paper]:
+        """Searches arXiv first, falling back to OpenAlex on HTTP error or empty result."""
+        try:
+            papers = await self.arxiv.search(query, max_results=max_results)
+        except httpx.HTTPError as exc:
+            logger.warning("arXiv search failed (%s: %s); falling back to OpenAlex", type(exc).__name__, exc)
+            papers = []
+
+        if papers:
+            return papers
+
+        try:
+            return await self.openalex.search_works(query, limit=max_results)
+        except httpx.HTTPError as exc:
+            logger.warning("OpenAlex fallback search failed (%s: %s)", type(exc).__name__, exc)
+            return []
+
     async def search_papers(
         self,
         query: str,
@@ -133,19 +151,21 @@ class ScholarEngine:
         """
         Executes a broad multi-source search with optional year bounds.
         """
-        papers = await self.arxiv.search(query, max_results=limit * 2 if (year_min or year_max) else limit)
-        if year_min or year_max:
+        has_year_bounds = year_min is not None or year_max is not None
+        papers = await self._search_with_fallback(query, max_results=limit * 2 if has_year_bounds else limit)
+        if has_year_bounds:
             filtered = []
             for p in papers:
-                if p.published_date:
-                    try:
-                        yr = int(p.published_date[:4])
-                        if year_min and yr < year_min:
-                            continue
-                        if year_max and yr > year_max:
-                            continue
-                    except ValueError:
-                        pass
+                if not p.published_date:
+                    continue
+                try:
+                    yr = int(p.published_date[:4])
+                except ValueError:
+                    continue
+                if year_min is not None and yr < year_min:
+                    continue
+                if year_max is not None and yr > year_max:
+                    continue
                 filtered.append(p)
                 if len(filtered) >= limit:
                     break
@@ -155,25 +175,45 @@ class ScholarEngine:
     async def inspect_paper(self, paper_id: str) -> Optional[Paper]:
         """
         Fetches paper, merges OpenAlex citation metrics, and computes existing predicates.
+        Supports arXiv IDs as well as 'openalex:W...' identifiers.
         """
-        paper = await self.arxiv.get_paper_by_id(paper_id)
-        if not paper:
-            # Fallback to DuckDB Parquet in worker thread so event loop is never blocked
+        clean_id = paper_id.strip()
+        if clean_id.startswith("openalex:") or clean_id.startswith("https://openalex.org/"):
             try:
-                paper = await asyncio.to_thread(self.duckdb_hf.query_paper_metadata_by_id, paper_id)
-            except duckdb.Error as exc:
-                logger.warning("DuckDB fallback lookup failed for %s: %s", paper_id, exc)
-                paper = None
+                paper = await self.openalex.get_work_by_id(clean_id)
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning("OpenAlex inspect failed for %s: %s", clean_id, exc)
+                return None
             if not paper:
                 return None
+        else:
+            try:
+                paper = await self.arxiv.get_paper_by_id(clean_id)
+            except httpx.HTTPError as exc:
+                logger.warning("arXiv lookup failed for %s (%s); trying DuckDB fallback", clean_id, exc)
+                paper = None
 
-        # Fetch OpenAlex citation graph
-        work = await self.openalex.get_work_by_arxiv(paper_id)
-        if work:
-            paper.openalex_id = work.openalex_id
-            paper.citations_count = work.cited_by_count
-            if work.doi:
-                paper.doi = work.doi
+            if not paper:
+                # Fallback to DuckDB Parquet in worker thread so event loop is never blocked
+                try:
+                    paper = await asyncio.to_thread(self.duckdb_hf.query_paper_metadata_by_id, clean_id)
+                except duckdb.Error as exc:
+                    logger.warning("DuckDB fallback lookup failed for %s: %s", clean_id, exc)
+                    paper = None
+                if not paper:
+                    return None
+
+            # Fetch OpenAlex citation graph for arXiv papers
+            try:
+                work = await self.openalex.get_work_by_arxiv(clean_id)
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning("OpenAlex enrichment failed for %s: %s", clean_id, exc)
+                work = None
+            if work:
+                paper.openalex_id = work.openalex_id
+                paper.citations_count = work.cited_by_count
+                if work.doi:
+                    paper.doi = work.doi
 
         # Attach stored predicates (live cached only)
         stored_preds = self.store.get_paper_predicates(paper.id)
@@ -235,8 +275,8 @@ class ScholarEngine:
         """
         t0 = time.perf_counter()
 
-        # Step 1: Broad discovery
-        candidates = await self.arxiv.search(query, max_results=max_candidates)
+        # Step 1: Broad discovery (with OpenAlex fallback)
+        candidates = await self._search_with_fallback(query, max_results=max_candidates)
 
         # Step 2: Pre-RAG Semantic Screening
         gate_report = await self.gate.screen_papers(candidates, predicates)
@@ -244,7 +284,13 @@ class ScholarEngine:
 
         # Step 3: Citation Graph Expansion & Enrichment for survivors
         for paper in survivors:
-            work = await self.openalex.get_work_by_arxiv(paper.id)
+            if paper.provenance_source == "openalex" or paper.id.startswith("openalex:"):
+                continue
+            try:
+                work = await self.openalex.get_work_by_arxiv(paper.id)
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning("OpenAlex enrichment failed for %s: %s", paper.id, exc)
+                work = None
             if work:
                 paper.openalex_id = work.openalex_id
                 paper.citations_count = work.cited_by_count
