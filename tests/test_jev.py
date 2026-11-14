@@ -258,3 +258,23 @@ async def test_jev_simulation_precedence_ns3_with_testbed_scores_high():
 
     assert hybrid_dec.probability > 0.75
     assert sim_dec.probability < 0.20
+
+
+@pytest.mark.asyncio
+async def test_jev_simulation_word_boundary_routing_avoids_false_branches():
+    client = JevClient(force_simulation=True)
+
+    # H2a: server.py P_empirical question on a GNN paper must not fall into wireless hardware branch (0.12)
+    gnn_abstract = (
+        "We present an equivariant graph neural network evaluated with empirical "
+        "experiments and ablation studies on the QM9 benchmark."
+    )
+    emp_q = "Does this work present empirical evaluations or experimental measurements?"
+    gnn_dec = await client.evaluate_noul(gnn_abstract, emp_q)
+    assert gnn_dec.probability > 0.25
+
+    # H2b: 'machine learning' must not trigger the 'mac' substring branch
+    mac_paper = "We design a wireless MAC scheduler reducing queue airtime jitter and latency."
+    ml_q = "Are the methods or results in this paper applicable to: machine learning?"
+    ml_dec = await client.evaluate_noul(mac_paper, ml_q)
+    assert ml_dec.probability < 0.25

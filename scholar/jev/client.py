@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import time
 import httpx
 from typing import Dict, List, Optional, Any
@@ -197,22 +198,22 @@ class JevClient:
         state_lower = state.lower()
         q_lower = question.lower()
         
-        # Real hardware / experiment test
-        if "real hardware" in q_lower or "experimental" in q_lower or "testbed" in q_lower:
+        # Real hardware / testbed test (word-boundary dispatch; avoids hijacking general 'experimental' queries)
+        if re.search(r"\b(real hardware|hardware|testbed)\b", q_lower):
             keywords = ["testbed", "hardware", "cpe", "access point", "prototype", "deployed", "measurements", "in the wild", "qca", "atheros", "mikrotik"]
             matches = sum(1 for kw in keywords if kw in state_lower)
             if ("simulation only" in state_lower or "ns-3" in state_lower or "matlab" in state_lower) and matches == 0:
                 return 0.08
             return min(0.98, 0.40 + matches * 0.15) if matches > 0 else 0.12
 
-        # MAC scheduler / latency test
-        if "mac" in q_lower or "scheduler" in q_lower or "latency" in q_lower:
+        # MAC scheduler / latency test (word-boundary prevents 'mac' matching 'machine')
+        if re.search(r"\b(mac|scheduler|latency)\b", q_lower):
             keywords = ["scheduler", "scheduling", "queue", "airtime", "mac", "latency", "jitter", "tdma", "fairness", "ptmp", "bufferbloat"]
-            matches = sum(1 for kw in keywords if kw in state_lower)
+            matches = sum(1 for kw in keywords if re.search(rf"\b{re.escape(kw)}\b", state_lower))
             return min(0.97, 0.35 + matches * 0.12) if matches > 0 else 0.15
 
         # Simulation only test
-        if "simulation only" in q_lower:
+        if re.search(r"\bsimulation only\b", q_lower):
             if any(term in state_lower for term in ["simulation only", "purely simulation", "omnet++", "ns-2", "ns-3"]):
                 return 0.94
             if any(term in state_lower for term in ["deployed", "testbed", "hardware", "field trial"]):
@@ -227,23 +228,29 @@ class JevClient:
 
             if "contradict" in q_lower:
                 # check for opposing terms
-                if "no" in claim_part and "reduces" in evidence_part:
+                if re.search(r"\bno\b", claim_part) and "reduces" in evidence_part:
                     return 0.85
                 return 0.05
-            
-            # Support question: check overlap of key content words
-            claim_words = [w.strip('.,;:"') for w in claim_part.split() if len(w) > 4 and w not in ["scheduler", "proposed", "demonstrates", "physical", "tested"]]
+
+            # Support question: check overlap of key content words (punctuation stripped)
+            claim_words = [
+                w for w in re.findall(r"\b[a-z0-9]+\b", claim_part)
+                if len(w) > 4 and w not in {"scheduler", "proposed", "demonstrates", "physical", "tested"}
+            ]
             if not claim_words:
                 return 0.82
             matches = sum(1 for w in claim_words if w in evidence_part)
             overlap = matches / len(claim_words)
             return min(0.96, max(0.20, 0.40 + overlap * 0.55))
 
-        # General semantic keyword overlap
-        q_words = [w for w in q_lower.split() if len(w) > 3 and w not in ["this", "that", "with", "from", "does", "have", "paper", "work"]]
+        # General semantic keyword overlap (punctuation stripped)
+        q_words = [
+            w for w in re.findall(r"\b[a-z0-9]+\b", q_lower)
+            if len(w) > 3 and w not in {"this", "that", "with", "from", "does", "have", "paper", "work"}
+        ]
         if not q_words:
             return 0.50
-        
-        matches = sum(1 for w in q_words if w in state_lower)
+
+        matches = sum(1 for w in q_words if re.search(rf"\b{re.escape(w)}\b", state_lower))
         ratio = matches / len(q_words)
         return min(0.95, max(0.05, ratio * 0.9 + 0.1))
