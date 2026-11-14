@@ -171,3 +171,14 @@ async def test_openalex_search_works_sets_provenance_and_reconstructs_abstract()
     assert papers[0].provenance_source == "openalex"
     assert papers[0].abstract == "Loaded latency improves."
     assert papers[0].citations_count == 17
+
+
+def test_openalex_client_mailto_env_and_omission(monkeypatch):
+    monkeypatch.delenv("OPENALEX_MAILTO", raising=False)
+    client_no_mail = OpenAlexClient()
+    assert client_no_mail.headers["User-Agent"] == "ScholarEngine/1.0"
+    assert "mailto:" not in client_no_mail.headers["User-Agent"]
+
+    monkeypatch.setenv("OPENALEX_MAILTO", "research@example.org")
+    client_env = OpenAlexClient()
+    assert client_env.headers["User-Agent"] == "ScholarEngine/1.0 (mailto:research@example.org)"

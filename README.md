@@ -95,15 +95,13 @@ flowchart TD
 git clone https://github.com/wolverin0/scholar-mcp.git
 cd scholar-mcp
 
-# Create a virtual environment and install runtime + test dependencies
+# Create a virtual environment and install package + dev dependencies
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt "mcp<2"
+pip install -e ".[dev]" "mcp<2"
 ```
 
-> **Install caveats (verified 2026-11-04, Python 3.13):**
-> * `pip install -e .` currently **fails**: setuptools' flat-layout auto-discovery finds two top-level packages (`scholar`, `debates`) and aborts. Until `pyproject.toml` declares its packages, install from `requirements.txt` and run the code from the repository root (or with `PYTHONPATH` pointing at it). For the same reason the `scholar` / `scholar-mcp` console scripts are not installed; use `python -m scholar.cli` and `python -m scholar.mcp.server`.
-> * `mcp>=1.0.0` now resolves to **mcp 2.x**, which removed `mcp.server.fastmcp`; the server then fails at import. Pin `mcp<2` (as above) until the server is migrated.
+> **Note:** `mcp>=1.0.0` may resolve to **mcp 2.x** if unconstrained, which removed `mcp.server.fastmcp`; pin `mcp<2` until the server is migrated.
 
 ### 2. Configuration (`.env`)
 

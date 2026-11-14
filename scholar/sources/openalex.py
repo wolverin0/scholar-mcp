@@ -5,6 +5,7 @@ Fetches citation graphs, author institutions, referenced works, and impact metri
 
 from __future__ import annotations
 import logging
+import os
 import re
 import httpx
 from typing import Dict, List, Optional, Any
@@ -39,12 +40,16 @@ class OpenAlexClient:
 
     def __init__(
         self,
-        mailto: str = "infra@homelab.local",
+        mailto: Optional[str] = None,
         timeout: float = 12.0,
         transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
-        # OpenAlex requests a mailto in user-agent for polite pool
-        self.headers = {"User-Agent": f"ScholarEngine/1.0 (mailto:{mailto})"}
+        # OpenAlex polite pool: include mailto only when explicitly configured via arg or OPENALEX_MAILTO
+        effective_mailto = mailto if mailto is not None else os.environ.get("OPENALEX_MAILTO")
+        if effective_mailto:
+            self.headers = {"User-Agent": f"ScholarEngine/1.0 (mailto:{effective_mailto})"}
+        else:
+            self.headers = {"User-Agent": "ScholarEngine/1.0"}
         self.timeout = timeout
         self.transport = transport
 
