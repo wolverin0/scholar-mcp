@@ -33,6 +33,8 @@ class JevDecision(BaseModel):
     model_version: str = "jev-system-one"
     source: str = Field(default="live", description="'live' (verified API/LLM) or 'heuristic' (simulated/fallback)")
     is_heuristic: bool = Field(default=False, description="True if result was generated via local heuristics")
+    verified: bool = Field(default=False, description="True only when verified by a valid live Jev API response")
+    failure_reason: Optional[str] = Field(default=None, description="Reason live evaluation fell back to heuristic")
 
 
 class JevClient:
@@ -48,7 +50,8 @@ class JevClient:
         force_simulation: bool = False,
         transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
-        self.api_key = api_key if api_key is not None else os.environ.get("TYPESAFE_API_KEY")
+        raw_key = api_key if api_key is not None else os.environ.get("TYPESAFE_API_KEY")
+        self.api_key = raw_key.strip() if isinstance(raw_key, str) and raw_key.strip() else None
         self.base_url = base_url
         self.is_simulated = force_simulation or not bool(self.api_key)
         self.transport = transport
@@ -59,16 +62,46 @@ class JevClient:
         return httpx.AsyncClient(timeout=timeout)
 
     @staticmethod
+    def _parse_answers_dict(data: Any) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValueError("Malformed response: JSON payload must be an object")
+        answers = data.get("answers")
+        if not isinstance(answers, dict):
+            raise ValueError("Malformed response: 'answers' must be a dict")
+        return answers
+
+    @staticmethod
     def _parse_noul_prob(ans: Any) -> float:
         if not isinstance(ans, dict) or "noul" not in ans:
             raise ValueError("Malformed response: missing 'noul' probability in answers")
-        prob = float(ans["noul"])
+        raw_val = ans["noul"]
+        if isinstance(raw_val, bool):
+            raise ValueError("Malformed response: 'noul' probability must be numeric, not bool")
+        prob = float(raw_val)
         if not math.isfinite(prob) or prob < 0.0 or prob > 1.0:
             raise ValueError(f"Malformed response: 'noul' probability {prob} outside [0.0, 1.0]")
         return prob
 
+    @staticmethod
+    def _classify_failure(exc: Exception) -> str:
+        if isinstance(exc, httpx.TimeoutException):
+            return "timeout"
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"http_{exc.response.status_code}"
+        if isinstance(exc, httpx.HTTPError):
+            return "http_error"
+        return "malformed_response"
+
+    def _simulated_reason(self) -> str:
+        return "missing_api_key" if not self.api_key else "forced_simulation"
+
     def _heuristic_decision(
-        self, state: str, question: str, t0: float, model_version: str
+        self,
+        state: str,
+        question: str,
+        t0: float,
+        model_version: str,
+        failure_reason: Optional[str] = None,
     ) -> JevDecision:
         prob = self._simulate_noul(state, question)
         latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -79,6 +112,8 @@ class JevClient:
             model_version=model_version,
             source="heuristic",
             is_heuristic=True,
+            verified=False,
+            failure_reason=failure_reason,
         )
 
     async def evaluate_noul(self, state: str, question: str) -> JevDecision:
@@ -89,7 +124,9 @@ class JevClient:
         t0 = time.perf_counter()
 
         if self.is_simulated:
-            return self._heuristic_decision(state, question, t0, "jev-simulated-v1")
+            return self._heuristic_decision(
+                state, question, t0, "jev-simulated-v1", failure_reason=self._simulated_reason()
+            )
 
         # Real API request
         try:
@@ -114,8 +151,8 @@ class JevClient:
                 resp.raise_for_status()
                 data = resp.json()
                 latency_ms = (time.perf_counter() - t0) * 1000.0
-                ans = data.get("answers", {}).get("q0")
-                prob = self._parse_noul_prob(ans)
+                answers = self._parse_answers_dict(data)
+                prob = self._parse_noul_prob(answers.get("q0"))
                 return JevDecision(
                     question=question,
                     probability=prob,
@@ -123,14 +160,20 @@ class JevClient:
                     model_version=data.get("model", "jev-latest"),
                     source="live",
                     is_heuristic=False,
+                    verified=True,
+                    failure_reason=None,
                 )
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            reason = self._classify_failure(exc)
             logger.warning(
-                "Jev evaluate_noul failed (%s: %s); falling back to heuristic",
+                "Jev evaluate_noul failed (%s: %s, reason=%s); falling back to heuristic",
                 type(exc).__name__,
                 exc,
+                reason,
             )
-            return self._heuristic_decision(state, question, t0, "jev-simulated-fallback")
+            return self._heuristic_decision(
+                state, question, t0, "jev-simulated-fallback", failure_reason=reason
+            )
 
     async def batch_evaluate_predicates(self, state: str, questions: List[str]) -> Dict[str, JevDecision]:
         """
@@ -138,8 +181,9 @@ class JevClient:
         """
         t0 = time.perf_counter()
         if self.is_simulated:
+            reason = self._simulated_reason()
             return {
-                q: self._heuristic_decision(state, q, t0, "jev-simulated-v1")
+                q: self._heuristic_decision(state, q, t0, "jev-simulated-v1", failure_reason=reason)
                 for q in questions
             }
 
@@ -161,9 +205,7 @@ class JevClient:
                 resp.raise_for_status()
                 data = resp.json()
                 latency_ms = (time.perf_counter() - t0) * 1000.0
-                answers = data.get("answers")
-                if not isinstance(answers, dict):
-                    raise ValueError("Malformed response: 'answers' must be a dict")
+                answers = self._parse_answers_dict(data)
                 results: Dict[str, JevDecision] = {}
                 for i, q in enumerate(questions):
                     key = f"q_{i}"
@@ -177,16 +219,22 @@ class JevClient:
                         model_version=data.get("model", "jev-latest"),
                         source="live",
                         is_heuristic=False,
+                        verified=True,
+                        failure_reason=None,
                     )
                 return results
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            reason = self._classify_failure(exc)
             logger.warning(
-                "Jev batch_evaluate_predicates failed (%s: %s); falling back to heuristic",
+                "Jev batch_evaluate_predicates failed (%s: %s, reason=%s); falling back to heuristic",
                 type(exc).__name__,
                 exc,
+                reason,
             )
             return {
-                q: self._heuristic_decision(state, q, t0, "jev-simulated-fallback")
+                q: self._heuristic_decision(
+                    state, q, t0, "jev-simulated-fallback", failure_reason=reason
+                )
                 for q in questions
             }
 

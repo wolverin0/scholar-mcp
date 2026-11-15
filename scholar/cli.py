@@ -53,8 +53,8 @@ async def run_cli(
         engine = ScholarEngine()
     if engine.jev.is_simulated:
         print(
-            "[!] WARNING: TYPESAFE_API_KEY not set. Running in unverified heuristic mode "
-            "(outputs are NOT live-verified).",
+            "[!] WARNING: TYPESAFE_API_KEY not set. Claim verification fails closed as unverified "
+            "(auxiliary heuristics are unreliable and do not decide verdicts).",
             file=sys.stderr,
         )
 
@@ -130,7 +130,8 @@ async def run_cli(
                     f"P(Applicable): {p.semantic_features.get('P_applicable', 0):.2f} ({app_src})"
                 )
                 for c in p.claims:
-                    print(f"  Claim Status: [{c.status.upper()}] (source={c.source}, P={c.verification_probability or 0:.2f})")
+                    prob_str = f"{c.verification_probability:.2f}" if c.verification_probability is not None else "N/A"
+                    print(f"  Claim Status: [{c.status.upper()}] (source={c.source}, P={prob_str})")
 
 
 def main(argv: Optional[List[str]] = None):

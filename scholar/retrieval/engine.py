@@ -327,14 +327,14 @@ class ScholarEngine:
 
         duration = round(time.perf_counter() - t0, 3)
         heuristic_evaluations = gate_report.heuristic_count + sum(
-            1 for c in verified_claims if c.source == "heuristic"
+            1 for c in verified_claims if c.source not in ("live", "none")
         )
         warning = None
         if heuristic_evaluations > 0 or self.jev.is_simulated:
             warning = (
-                "Results include unverified heuristic evaluations "
+                "Claim verification failed closed as unverified "
                 "(TYPESAFE_API_KEY not set or Jev API unavailable). "
-                "Do not treat heuristic outputs as verified claims."
+                "Auxiliary heuristics are unreliable and never decide the verdict."
             )
 
         return ResearchReport(

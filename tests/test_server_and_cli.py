@@ -29,12 +29,19 @@ def _make_fake_engine() -> MagicMock:
         id="claim_1",
         statement="Sub-5ms latency on hardware",
         paper_id="2401.12345",
-        status="unverified_heuristic",
-        result_state="heuristic",
-        verification_probability=0.80,
-        contradiction_probability=0.05,
-        contradiction_source="heuristic",
-        source="heuristic",
+        status="unverified",
+        result_state="unverified",
+        verification_probability=None,
+        contradiction_probability=None,
+        contradiction_source="unavailable",
+        source="unavailable",
+        failure_reason="missing_api_key",
+        auxiliary_heuristic={
+            "verification_probability": 0.80,
+            "contradiction_probability": 0.05,
+            "reliable": False,
+            "label": "unreliable_keyword_heuristic",
+        },
         model_version="jev-simulated-v1",
         supporting_evidence=[
             Evidence(
@@ -108,12 +115,17 @@ async def test_mcp_five_tools_with_fake_engine():
         assert "warning" in inspect_res
 
         claim_res = json.loads(await server.scholar_verify_claim("Sub-5ms latency", "2401.12345"))
-        assert claim_res["status"] == "unverified_heuristic"
-        assert claim_res["contradiction_probability"] == 0.05
+        assert claim_res["status"] == "unverified"
+        assert claim_res["verification_probability"] is None
+        assert claim_res["auxiliary_heuristic"]["reliable"] is False
         assert "warning" in claim_res
 
         pred_res = json.loads(await server.scholar_verify_predicate("Real hardware testbed", "Empirical?"))
-        assert pred_res["source"] == "heuristic"
+        assert pred_res["status"] == "unverified"
+        assert pred_res["verified"] is False
+        assert pred_res["probability"] is None
+        assert pred_res["source"] == "unavailable"
+        assert pred_res["auxiliary_heuristic"]["reliable"] is False
         assert "warning" in pred_res
 
         research_res = json.loads(await server.scholar_research("wireless latency", threshold=0.5, limit=5))
@@ -149,7 +161,7 @@ async def test_cli_run_in_process_with_fake_engine(capsys):
 
     await cli.run_cli(["research", "wireless latency", "--limit", "2"], engine=fake)
     out_research = capsys.readouterr().out
-    assert "UNVERIFIED_HEURISTIC" in out_research
+    assert "UNVERIFIED" in out_research
     assert "WARNING" in out_research
 
 

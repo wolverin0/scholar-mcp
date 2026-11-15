@@ -4,7 +4,7 @@ Covers papers, authors, citations, semantic predicates, claims, and evidence.
 """
 
 from __future__ import annotations
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 
@@ -43,19 +43,27 @@ class Claim(BaseModel):
     paper_id: str
     status: str = Field(
         default="pending",
-        description="Status: supported, partial, unsupported, contradicted, unverified_heuristic, no_evidence"
+        description="Status: supported, partial, unsupported, contradicted, unverified, no_evidence"
     )
     verification_probability: Optional[float] = None
     contradiction_probability: Optional[float] = None
     contradiction_source: Optional[str] = None
     supporting_evidence: List[Evidence] = Field(default_factory=list)
     source: str = Field(
-        default="heuristic",
-        description="Verification source: 'live' (real API / LLM), 'heuristic' (local fallback), or 'none'"
+        default="unavailable",
+        description="Verification source: 'live' (real API / LLM), 'unavailable' (fail-closed), or 'none'"
     )
     result_state: str = Field(
-        default="heuristic",
-        description="Result state: verified, heuristic, failed, contradicted, unsupported"
+        default="unverified",
+        description="Result state: verified, unverified, failed, contradicted, unsupported"
+    )
+    failure_reason: Optional[str] = Field(
+        default=None,
+        description="Reason live verification failed closed, if unavailable"
+    )
+    auxiliary_heuristic: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Unreliable auxiliary keyword-heuristic data; never used to decide verdict"
     )
     model_version: Optional[str] = None
     document_id: Optional[str] = None

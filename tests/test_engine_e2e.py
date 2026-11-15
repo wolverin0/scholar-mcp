@@ -93,7 +93,10 @@ async def test_mcp_scholar_research_emits_warning_and_never_supported_when_simul
     for p in data["surviving_papers"]:
         assert p["semantic_sources"]
         for c in p["claims"]:
-            assert c["status"] == "unverified_heuristic"
+            assert c["status"] == "unverified"
+            assert c["source"] == "unavailable"
+            assert c["prob"] is None
+            assert c["auxiliary_heuristic"]["reliable"] is False
             assert c["status"] not in ("supported", "partial")
 
 
