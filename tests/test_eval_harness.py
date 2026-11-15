@@ -136,10 +136,13 @@ async def test_provenance_demarcation_contract():
     )
     
     checked = await verifier.verify_claim(claim, evidence)
-    assert checked.source in ["live", "heuristic"], "Source must be explicitly declared"
-    assert checked.result_state in ["verified", "heuristic", "contradicted", "unsupported"]
+    assert checked.source in ["live", "unavailable"], "Source must be explicitly declared"
+    assert checked.result_state in ["verified", "unverified", "contradicted", "unsupported"]
+    assert checked.status == "unverified"
     assert checked.document_id == "paper_prov_01"
-    assert checked.verification_probability is not None
+    assert checked.verification_probability is None
+    assert checked.auxiliary_heuristic is not None
+    assert checked.auxiliary_heuristic["reliable"] is False
 
 
 async def run_benchmark_suite(verifier: PostRAGVerifier, cases=BENCHMARK_CASES) -> dict[str, tuple[int, int]]:
@@ -187,12 +190,12 @@ async def run_benchmark_suite(verifier: PostRAGVerifier, cases=BENCHMARK_CASES) 
 @pytest.mark.asyncio
 @pytest.mark.xfail(
     strict=True,
-    reason="Heuristic mode emits unverified_heuristic instead of semantic support/contradiction; live Jev API required.",
+    reason="Without live Jev API, verification fails closed as unverified instead of emitting supported/partial/contradicted.",
 )
 async def test_50_benchmark_eval_cases():
     """
-    Runs the full 50-case benchmark evaluation suite through PostRAGVerifier in heuristic mode.
-    Expected to fail semantic accuracy assertions because heuristic mode refuses to emit supported/partial.
+    Runs the full 50-case benchmark evaluation suite through PostRAGVerifier without live API.
+    Expected to fail semantic accuracy assertions because fail-closed mode refuses to emit supported/partial.
     """
     jev = JevClient(force_simulation=True)
     verifier = PostRAGVerifier(jev)
@@ -201,7 +204,7 @@ async def test_50_benchmark_eval_cases():
 
 @pytest.mark.asyncio
 async def test_50_benchmark_eval_cases_heuristic_never_claims_verified():
-    """Verifies heuristic mode honestly marks all 50 cases as unverified_heuristic."""
+    """Verifies fail-closed mode marks all 50 cases as unverified and keeps heuristics auxiliary."""
     jev = JevClient(force_simulation=True)
     verifier = PostRAGVerifier(jev)
     for case in BENCHMARK_CASES:
@@ -216,8 +219,11 @@ async def test_50_benchmark_eval_cases_heuristic_never_claims_verified():
         )
         claim = Claim(id=f"c_{case['id']}", statement=case["claim"], paper_id=case["id"])
         checked = await verifier.verify_claim(claim, evidence)
-        assert checked.source == "heuristic"
-        assert checked.status == "unverified_heuristic"
+        assert checked.source == "unavailable"
+        assert checked.status == "unverified"
+        assert checked.verification_probability is None
+        assert checked.auxiliary_heuristic is not None
+        assert checked.auxiliary_heuristic["reliable"] is False
 
 
 @pytest.mark.asyncio

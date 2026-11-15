@@ -72,11 +72,14 @@ async def test_post_rag_verifier():
     )
 
     verified = await verifier.verify_claim(claim, evidence)
-    assert verified.source == "heuristic"
-    assert verified.status == "unverified_heuristic"
-    assert verified.result_state == "heuristic"
-    assert verified.verification_probability is not None
-    assert verified.verification_probability > 0.40
+    assert verified.source == "unavailable"
+    assert verified.status == "unverified"
+    assert verified.result_state == "unverified"
+    assert verified.verification_probability is None
+    assert verified.contradiction_probability is None
+    assert verified.auxiliary_heuristic is not None
+    assert verified.auxiliary_heuristic["reliable"] is False
+    assert verified.auxiliary_heuristic["verification_probability"] > 0.40
 
 
 @pytest.mark.asyncio

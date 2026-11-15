@@ -145,32 +145,51 @@ class PostRAGVerifier:
             self.jev.evaluate_noul(state_text, support_q),
             self.jev.evaluate_noul(state_text, contra_q),
         )
-        prob = decision.probability
-        claim.verification_probability = prob
-        claim.contradiction_probability = contra_decision.probability
-        claim.contradiction_source = contra_decision.source
         claim.model_version = decision.model_version
         claim.document_id = cited_evidence.paper_id or claim.paper_id
 
         all_live = decision.source == "live" and contra_decision.source == "live"
-        claim.source = "live" if all_live else "heuristic"
 
-        if claim.source != "live":
-            # Never emit supported/partial (or unverified truth statuses) from non-live heuristics
-            claim.status = "unverified_heuristic"
-            claim.result_state = "heuristic"
-        elif contra_decision.probability >= 0.70:
-            claim.status = "contradicted"
-            claim.result_state = "contradicted"
-        elif prob >= 0.80:
-            claim.status = "supported"
-            claim.result_state = "verified"
-        elif prob >= 0.50:
-            claim.status = "partial"
-            claim.result_state = "verified"
+        if not all_live:
+            # Fail closed: never emit supported/partial (or trust heuristic probabilities) without live Jev
+            claim.source = "unavailable"
+            claim.status = "unverified"
+            claim.result_state = "unverified"
+            claim.verification_probability = None
+            claim.contradiction_probability = None
+            claim.contradiction_source = "unavailable" if contra_decision.source != "live" else "live"
+            claim.failure_reason = (
+                (decision.failure_reason if decision.source != "live" else None)
+                or (contra_decision.failure_reason if contra_decision.source != "live" else None)
+                or "service_unavailable"
+            )
+            claim.auxiliary_heuristic = {
+                "verification_probability": decision.probability,
+                "contradiction_probability": contra_decision.probability,
+                "reliable": False,
+                "label": "unreliable_keyword_heuristic",
+                "note": "Auxiliary keyword heuristic only; unreliable and never used to decide verification.",
+            }
         else:
-            claim.status = "unsupported"
-            claim.result_state = "unsupported"
+            prob = decision.probability
+            claim.source = "live"
+            claim.verification_probability = prob
+            claim.contradiction_probability = contra_decision.probability
+            claim.contradiction_source = "live"
+            claim.failure_reason = None
+            claim.auxiliary_heuristic = None
+            if contra_decision.probability >= 0.70:
+                claim.status = "contradicted"
+                claim.result_state = "contradicted"
+            elif prob >= 0.80:
+                claim.status = "supported"
+                claim.result_state = "verified"
+            elif prob >= 0.50:
+                claim.status = "partial"
+                claim.result_state = "verified"
+            else:
+                claim.status = "unsupported"
+                claim.result_state = "unsupported"
 
         claim.supporting_evidence.append(cited_evidence)
         return claim

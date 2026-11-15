@@ -27,7 +27,7 @@ def get_engine() -> ScholarEngine:
         _engine = ScholarEngine()
         if _engine.jev.is_simulated:
             logger.warning(
-                "ScholarEngine started without TYPESAFE_API_KEY; running in unverified heuristic mode."
+                "ScholarEngine started without TYPESAFE_API_KEY; verification will fail closed as unverified."
             )
     return _engine
 
@@ -133,10 +133,15 @@ async def scholar_verify_claim(claim: str, paper_id: str) -> str:
         "model_version": checked.model_version,
         "evidence_spans": evidences
     }
-    if checked.source != "live":
+    if checked.failure_reason:
+        res["failure_reason"] = checked.failure_reason
+    if checked.auxiliary_heuristic is not None:
+        res["auxiliary_heuristic"] = checked.auxiliary_heuristic
+    if checked.source not in ("live", "none"):
         res["warning"] = (
-            "Verification used unverified local heuristics "
-            "(TYPESAFE_API_KEY not set or Jev API unavailable)."
+            "Claim verification failed closed as unverified "
+            "(TYPESAFE_API_KEY not set or Jev API unavailable). "
+            "Auxiliary heuristic is unreliable and does not decide the verdict."
         )
     return json.dumps(res, indent=2)
 
@@ -145,22 +150,43 @@ async def scholar_verify_claim(claim: str, paper_id: str) -> str:
 async def scholar_verify_predicate(state_text: str, question: str) -> str:
     """
     Directly evaluates a boolean or probabilistic proposition against any state or text passage.
-    Returns probability in [0.0, 1.0], decision latency, and provenance source (live vs heuristic).
+    Fails closed as unverified when live TypeSafe Jev API is unavailable.
     """
     decision = await get_engine().jev.evaluate_noul(state_text, question)
-    res = {
-        "question": decision.question,
-        "probability": decision.probability,
-        "latency_ms": decision.latency_ms,
-        "source": decision.source,
-        "is_heuristic": decision.is_heuristic,
-        "model_version": decision.model_version
-    }
-    if decision.source != "live":
-        res["warning"] = (
-            "Evaluation used unverified local heuristics "
-            "(TYPESAFE_API_KEY not set or Jev API unavailable)."
-        )
+    if decision.source == "live":
+        res = {
+            "question": decision.question,
+            "status": "verified",
+            "verified": True,
+            "probability": decision.probability,
+            "latency_ms": decision.latency_ms,
+            "source": decision.source,
+            "is_heuristic": False,
+            "model_version": decision.model_version,
+        }
+    else:
+        res = {
+            "question": decision.question,
+            "status": "unverified",
+            "verified": False,
+            "probability": None,
+            "latency_ms": decision.latency_ms,
+            "source": "unavailable",
+            "is_heuristic": True,
+            "model_version": decision.model_version,
+            "failure_reason": decision.failure_reason,
+            "auxiliary_heuristic": {
+                "probability": decision.probability,
+                "reliable": False,
+                "label": "unreliable_keyword_heuristic",
+                "note": "Auxiliary keyword heuristic only; unreliable and never decides verification.",
+            },
+            "warning": (
+                "Predicate verification failed closed as unverified "
+                "(TYPESAFE_API_KEY not set or Jev API unavailable). "
+                "Auxiliary heuristic is unreliable and does not decide the verdict."
+            ),
+        }
     return json.dumps(res, indent=2)
 
 
@@ -199,8 +225,9 @@ async def scholar_research(
     
     surviving = []
     for p in report.surviving_papers:
-        claims = [
-            {
+        claims = []
+        for c in p.claims:
+            claim_entry = {
                 "statement": c.statement,
                 "status": c.status,
                 "prob": c.verification_probability,
@@ -217,8 +244,11 @@ async def scholar_research(
                     for ev in c.supporting_evidence
                 ]
             }
-            for c in p.claims
-        ]
+            if c.failure_reason:
+                claim_entry["failure_reason"] = c.failure_reason
+            if c.auxiliary_heuristic is not None:
+                claim_entry["auxiliary_heuristic"] = c.auxiliary_heuristic
+            claims.append(claim_entry)
         surviving.append({
             "id": p.id,
             "title": p.title,
@@ -247,7 +277,7 @@ async def scholar_research(
 def main():
     if not os.environ.get("TYPESAFE_API_KEY"):
         logger.warning(
-            "TYPESAFE_API_KEY is not set; ScholarEngine MCP tools will emit heuristic evaluations marked unverified_heuristic."
+            "TYPESAFE_API_KEY is not set; ScholarEngine MCP tools will fail closed and emit unverified claim verdicts."
         )
     mcp.run()
 
